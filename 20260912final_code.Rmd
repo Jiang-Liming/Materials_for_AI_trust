@@ -1,0 +1,6328 @@
+---
+title: "code_for_"
+output: html_document
+date: "2026-01-07"
+---
+
+```{r packages}
+
+library(showtext)
+library(lavaan)
+
+library(readxl)
+library(writexl)
+
+library(openxlsx)
+library(dplyr)
+library(gridExtra)
+
+library(ggplot2)
+library(scales) 
+
+library(psych)
+library(GPArotation)
+
+library(stringr)
+library(forcats)
+
+library(purrr)
+library(tidyr)
+
+```
+
+```{r Study 1} 
+
+mediationdata <- read.xlsx('mediationdata.xlsx')
+
+#------CFA-------
+
+mod <- '
+F =~ CT1 + CT2 + CT3 + CT4 + CT5 + CT6 + CT7 + CT8 + CT9 +
+     CT10 + CT11 + CT12 + CT13 + CT14 + CT15 + CT16 + CT17 +
+     CT18 + CT19 + CT20 + CT21 + CT22 + CT23 + CT24 + CT25 +
+     CT26 + CT27'
+
+fit <- cfa(mod, mediationdata, estimator="MLR")
+summary(fit, standardized=TRUE, fit.measures=TRUE)
+
+factor_scores <- lavPredict(fit, newdata = mediationdata, type = "lv", se = "standard") 
+mediationdata$AI_CT_F <- factor_scores
+
+vars <- c(
+  "CT1", "CT2", "CT3", "CT4", "CT5", "CT6", "CT7", "CT8", "CT9",
+  "CT10", "CT11", "CT12", "CT13", "CT14", "CT15", "CT16", "CT17",
+  "CT18", "CT19", "CT20", "CT21", "CT22", "CT23", "CT24", "CT25",
+  "CT26", "CT27"
+)
+
+omega(mediationdata[, vars]) # alpha = 0.94
+
+
+mod <- '
+PE =~ Acceptance_PE1 + Acceptance_PE2 + Acceptance_PE3 + Acceptance_PE4 + Acceptance_PE5 + Acceptance_PE6 + Acceptance_PE7 
+EE =~ Acceptance_EE1 + Acceptance_EE2 + Acceptance_EE3 + Acceptance_EE4 + Acceptance_EE5 
+FC =~ Acceptance_FC1 + Acceptance_FC2 + Acceptance_FC3
+SI =~ Acceptance_SI1 + Acceptance_SI2 + Acceptance_SI3 + Acceptance_SI4 + Acceptance_SI5 
+F =~ PE + EE + FC + SI'
+
+fit <- cfa(mod, mediationdata, estimator="MLR")
+summary(fit, standardized=TRUE, fit.measures=TRUE)
+
+factor_scores <- lavPredict(fit, newdata = mediationdata, type = "lv", se = "standard")
+mediationdata$Acceptance_F <- factor_scores[, "F"]    
+
+vars <- c(
+  "Acceptance_PE1", "Acceptance_PE2", "Acceptance_PE3", "Acceptance_PE4", 
+  "Acceptance_PE5", "Acceptance_PE6", "Acceptance_PE7",
+  "Acceptance_EE1", "Acceptance_EE2", "Acceptance_EE3", "Acceptance_EE4", 
+  "Acceptance_EE5",
+  "Acceptance_FC1", "Acceptance_FC2", "Acceptance_FC3",
+  "Acceptance_SI1", "Acceptance_SI2", "Acceptance_SI3", "Acceptance_SI4", 
+  "Acceptance_SI5"
+)
+
+omega(mediationdata[, vars]) # alpha = 0.89
+
+
+mod <- '
+F =~ Trust_humanlike1 + Trust_humanlike2 + Trust_humanlike3 + Trust_humanlike4 + Trust_humanlike5 + Trust_humanlike6 + Trust_functionality1 + Trust_functionality2 + Trust_functionality3 + Trust_functionality4 + Trust_functionality5'
+
+fit <- cfa(mod, mediationdata, estimator="MLR")
+summary(fit, standardized=TRUE, fit.measures=TRUE)
+
+factor_scores <- lavPredict(fit, newdata = mediationdata, type = "lv", se = "standard")
+mediationdata$Trust_F <- factor_scores[, "F"]   
+
+vars <- c(
+  "Trust_humanlike1", "Trust_humanlike2", "Trust_humanlike3", "Trust_humanlike4", 
+  "Trust_humanlike5", "Trust_humanlike6", "Trust_functionality1",
+  "Trust_functionality2", "Trust_functionality3", "Trust_functionality4", "Trust_functionality5"
+)
+
+omega(mediationdata[, vars]) # 0.92
+
+
+mediationdata$frequency <- factor(mediationdata$frequency, levels = c('monthly',"weekly","daily"), ordered = TRUE) 
+
+mod <- '
+embed =~ scenario_diversity + activity_diversity + AI_diversity + frequency'
+
+fit <- cfa(mod, data = mediationdata, ordered = c('frequency'))
+summary(fit, standardized=TRUE, fit.measures=TRUE)
+
+factor_scores <- lavPredict(fit, newdata = mediationdata, type = "lv") 
+mediationdata$embed_F <- factor_scores[,1]
+
+
+#------Mediation model-------
+
+model_path <- '
+  embed_F ~ a1*Acceptance_F
+  AI_CT_F ~ a2*Acceptance_F
+  
+  Trust_F ~ b1*embed_F + b2*AI_CT_F + cprime1*Acceptance_F
+  
+  ind_F1    := a1*b1
+  ind_F2    := a2*b2'
+
+set.seed(123)
+
+mediation_mod <- sem(model_path, data = mediationdata,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+summary(mediation_mod, standardized = TRUE, fit.measures = TRUE)
+
+parameterestimates(mediation_mod, 
+                   boot.ci.type = "perc",
+                   level = 0.95, 
+                   ci = TRUE) |> 
+  dplyr::filter(op == ":=")
+
+
+```
+
+```{r Study 2}
+
+#-----experiment-----
+
+experiment <- read.xlsx('experiment.xlsx')
+  
+experiment$diff_trust <- experiment$AI_Trust_avg_post - experiment$AI_Trust_avg_pre
+
+experiment$diff_AI_CT <- experiment$AI_CT_avg_post - experiment$AI_CT_avg_pre
+
+experiment <- experiment %>%
+  mutate(
+    group = case_when(
+      condition == 'withAI' & diff_AI_CT > 0.14 ~ 'Increased CT group',
+      condition == 'withAI' & diff_AI_CT <= 0.14 ~ 'Non-increased CT group',
+      condition ==  'withoutAI' ~ 'Independent work group',
+      TRUE ~ NA_character_
+    )
+  )
+
+cols_trust <- c("AI_Trust_avg_pre", "AI_Trust_avg_post")
+
+data_trust <- experiment %>%
+  dplyr::select(group, all_of(cols_trust)) %>%
+  mutate(across(all_of(cols_trust), ~ suppressWarnings(as.numeric(as.character(.x))))) %>%
+  tidyr::pivot_longer(
+    cols = all_of(cols_trust),
+    names_to = "var",
+    values_to = "value"
+  )
+
+data_trust <- data_trust %>%
+  mutate(var = recode(var,
+                      "AI_Trust_avg_pre" = "Pre-test",
+                      "AI_Trust_avg_post" = "Post-test"))
+
+group_order <- c('Increased CT group', 'Non-increased CT group', 'Independent work group')
+
+time_order <- c("Pre-test", "Post-test") 
+
+data_trust$group <- factor(data_trust$group, levels = group_order)
+data_trust$var <- factor(data_trust$var, levels = time_order)
+
+data_trust <- data_trust %>%
+  mutate(
+    var = factor(var, levels = c("Pre-test", "Post-test")),  
+    group_time = paste(group, var, sep = "_")
+  )
+
+p <- ggplot(data_trust, aes(x = group, y = value, fill = interaction(group, var))) +
+  stat_summary(fun = mean, geom = "bar", 
+               position = position_dodge(width = 0.7), 
+               width = 0.6,
+               aes(group = var)) +  
+  coord_cartesian(ylim = c(3, 7)) +
+  scale_y_continuous(breaks = seq(3, 7, 1)) +
+  scale_fill_manual(
+    values = c(
+      "Increased CT group.Pre-test" = "#A8E6CF",
+      "Increased CT group.Post-test" = "#56C596",
+      "Non-increased CT group.Pre-test" = "#B9CCED",
+      "Non-increased CT group.Post-test" = "#6B9BD1",
+      "Independent work group.Pre-test" = "#D4C5E2",
+      "Independent work group.Post-test" = "#9B7EBD"
+    ),
+    labels = c("Increased-Pre", "Increased-Post", 
+               "Non-increased-Pre", "Non-increased-Post",
+               "Independent-Pre", "Independent-Post")
+  ) +
+  labs(title = "", x = " ", y = "AI Trust", fill = "") +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    legend.text = element_text(size = 11),
+    axis.text.x = element_text(size = 13, face = "bold",color = "black"),
+    axis.text.y = element_text(size = 11),
+    axis.title.y = element_text(size = 12, face = "bold",color = "black"),
+    panel.background = element_blank(),  
+    panel.grid.major.y = element_line(color = "gray90"), 
+    panel.grid.major.x = element_blank(), 
+    panel.grid.minor = element_blank()
+  )
+
+
+#----ANCOVA-----
+
+ancova_data <- experiment %>%
+  mutate(
+    group = factor(group, levels = c('Increased CT group', 'Non-increased CT group', 'Independent work group')), 
+    pre = as.numeric(as.character(AI_Trust_avg_pre)), 
+    diff = as.numeric(as.character(AI_Trust_avg_post)) - as.numeric(as.character(AI_Trust_avg_pre))
+  ) %>%
+  dplyr::select(group, pre, diff) %>% 
+  na.omit() 
+
+ancova_data$group <- as.factor(ancova_data$group)
+
+ancova_result <- aov(diff ~ group + pre, data = ancova_data)
+summary(ancova_result)
+
+tukey_result <- TukeyHSD(ancova_result, "group")
+print(tukey_result)
+
+
+data_condition1 <- experiment %>%
+  filter(group == 'Increased CT group') %>%
+  dplyr::select(AI_Trust_avg_pre, AI_Trust_avg_post) %>%
+  mutate(
+    AI_Trust_avg_pre = as.numeric(as.character(AI_Trust_avg_pre)),
+    AI_Trust_avg_post = as.numeric(as.character(AI_Trust_avg_post))
+  )
+
+t.test(
+  data_condition1$AI_Trust_avg_pre, 
+  data_condition1$AI_Trust_avg_post,
+  paired = TRUE
+) # t = 4.509, df = 45, p = 0.000 mean difference: 0.296
+
+
+data_condition2 <- experiment %>%
+  filter(group == 'Non-increased CT group') %>%
+  dplyr::select(AI_Trust_avg_pre, AI_Trust_avg_post) %>%
+  mutate(
+    AI_Trust_avg_pre = as.numeric(as.character(AI_Trust_avg_pre)),
+    AI_Trust_avg_post = as.numeric(as.character(AI_Trust_avg_post))
+  )
+
+t.test(
+  data_condition2$AI_Trust_avg_pre, 
+  data_condition2$AI_Trust_avg_post,
+  paired = TRUE
+) # t = 1.284, df = 42, p = 0.206 mean difference: 0.099
+
+
+data_condition3 <- experiment %>%
+  filter(group == 'Independent work group') %>%
+  dplyr::select(AI_Trust_avg_pre, AI_Trust_avg_post) %>%
+  mutate(
+    AI_Trust_avg_pre = as.numeric(as.character(AI_Trust_avg_pre)),
+    AI_Trust_avg_post = as.numeric(as.character(AI_Trust_avg_post))
+  )
+
+t.test(
+  data_condition3$AI_Trust_avg_pre, 
+  data_condition3$AI_Trust_avg_post,
+  paired = TRUE
+) # t = 0.243, df = 39, p = 0.810 mean difference: 0.023
+
+
+#------logfile: single behavior------
+
+experiment_logfile <- read.xlsx('experiment_logfile.xlsx')
+
+experiment_logfile %>%
+  mutate(
+    n_missing = rowSums(
+      is.na(dplyr::select(.,
+                   decide_based_on_AI_r1,
+                   decide_based_on_AI_r2,
+                   decide_based_on_AI_r3,
+                   decide_based_on_AI_r4))
+    )
+  ) %>%
+  count(n_missing)
+
+experiment_logfile %>%
+  mutate(
+    n_missing = rowSums(
+      is.na(.[, c(
+        "decide_based_on_AI_r1",
+        "decide_based_on_AI_r2",
+        "decide_based_on_AI_r3",
+        "decide_based_on_AI_r4"
+      )])
+    )
+  ) %>%
+  filter(n_missing >= 1) %>%
+  count(group, n_missing) %>%
+  tidyr::pivot_wider(
+    names_from = n_missing,
+    values_from = n,
+    names_prefix = "missing_",
+    values_fill = 0
+  )
+
+
+experiment_logfile <- experiment_logfile %>%
+  filter(
+    rowSums(!is.na(dplyr::select(., decide_based_on_AI_r1, decide_based_on_AI_r2, decide_based_on_AI_r3, decide_based_on_AI_r4))) >= 2
+  )
+
+variables <- c(
+  "sum_total_row", 
+  'sum_assign_task',
+'sum_assign_alltask',
+'sum_assign_subtask',
+  "sum_guide_AI_to_optimize_general", 
+  "sum_guide_AI_to_optimize_specific",
+  "sum_generate_own_idea", 
+  "sum_ask_AI_to_organise_content",
+  "sum_question_AI_solution", 
+  "sum_ask_for_suggestion_refinement",
+  "sum_ask_for_explanation",
+  'sum_decide_based_on_AI'
+)
+
+result_table <- data.frame(
+  Variable = variables,
+  Mean_Group1 = numeric(length(variables)),
+  Mean_Group2 = numeric(length(variables))
+)
+
+for (i in seq_along(variables)) {
+  var <- variables[i]
+  group_means <- tapply(experiment_logfile[[var]], experiment_logfile$group, mean, na.rm = TRUE)
+  result_table$Mean_Group1[i] <- round(group_means[1],2)
+  result_table$Mean_Group2[i] <- round(group_means[2],2)
+}
+
+print(result_table)
+
+total_group1 <- result_table$Mean_Group1[result_table$Variable == "sum_total_row"]
+total_group2 <- result_table$Mean_Group2[result_table$Variable == "sum_total_row"]
+
+result_table$Percent_Group1 <- round(result_table$Mean_Group1 / total_group1 * 100, 3)
+result_table$Percent_Group2 <- round(result_table$Mean_Group2 / total_group2 * 100, 3)
+result_table$diff <- result_table$Percent_Group1 - result_table$Percent_Group2
+
+View(result_table)
+
+
+
+library(irr)
+
+log <- read.xlsx('coding_all.xlsx')
+
+ratings <- log[log$round == "wave1", c("codingA", "codingB")]
+kappa2(ratings, weight = "unweighted") #0.973
+
+ratings <- log[log$round == "wave2", c("codingA", "codingB")]
+kappa2(ratings, weight = "unweighted") #0.972
+
+ratings <- log[log$round == "wave3", c("codingA", "codingB")]
+kappa2(ratings, weight = "unweighted") #0.985
+
+ratings <- log[log$round == "wave4", c("codingA", "codingB")]
+kappa2(ratings, weight = "unweighted") #0.958
+
+
+#-------2gram------
+
+experiment_2gram <- read.xlsx("experiment_2step.xlsx")
+
+experiment_2gram <- experiment_2gram %>%
+  filter(behavior != "meaningless") %>%
+  filter(ID != '10112') # delete the one providing only 1 wave log
+
+order_check <- experiment_2gram %>%
+  group_by(round, ID) %>%
+  summarise(
+    is_sorted = all(input_timestamp == sort(input_timestamp)),
+    .groups = "drop"
+  )
+
+experiment_2gram <- experiment_2gram %>%
+  group_by(round, ID) %>%
+  mutate(
+    next_behavior = lead(behavior), 
+    `2gram` = ifelse(is.na(next_behavior), "", paste0(behavior, "_to_", next_behavior))  
+  ) %>%
+  ungroup()
+
+gram_freq <- experiment_2gram %>%
+  filter(`2gram` != "") %>%
+  group_by(group, `2gram`) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  arrange(group, desc(freq))
+
+total_by_group <- gram_freq %>%
+  group_by(group) %>%
+  summarise(total_sequence = sum(freq))
+
+gram_prop <- gram_freq %>%
+  left_join(total_by_group, by = "group") %>%
+  mutate(pp = round((freq / total_sequence * 100),2))
+
+gram_wide <- gram_prop %>%
+  pivot_wider(
+    id_cols = `2gram`,
+    names_from = group,
+    values_from = pp,
+    values_fill = 0
+  )
+
+gram_wide <- gram_wide %>%
+  mutate(diff = `Increased CT group` - `Non-increased CT group`)
+
+View(gram_wide)
+
+```
+
+```{r Study 3}
+
+df_final <- read.xlsx('sliding_windows.xlsx')
+
+target_quarters <- c(
+  "2026-Q2", "2026-Q1", 
+  "2025-Q4", "2025-Q3", "2025-Q2", "2025-Q1", 
+  "2024-Q4", "2024-Q3", "2024-Q2", "2024-Q1", 
+  "2023-Q4", "2023-Q3", "2023-Q2", "2023-Q1"
+)
+
+df_final <- df_final %>%
+  mutate(first_regular_quarter = factor(first_regular_quarter, levels = target_quarters))
+
+# Acceptance
+
+mod <- '
+PE =~ PE1 + PE2 + PE3 + PE4 + PE5 + PE6 + PE7
+EE =~ EE1 + EE2 + EE3 + EE4 + EE5
+FC =~ FC1 + FC2 + FC3
+SI =~ SI1 + SI2 + SI3 + SI4 + SI5
+F =~ PE + EE + FC + SI'
+
+fit <- cfa(mod, df_final, estimator="MLR")
+summary(fit, standardized=TRUE, fit.measures=TRUE)
+
+factor_scores <- lavPredict(fit, newdata = df_final, type = "lv", se = "standard")
+
+df_final$Acceptance_F <- factor_scores[, "F"]    
+
+vars_acceptance <- c(
+  "PE1", "PE2", "PE3", "PE4", "PE5", "PE6", "PE7",
+  "EE1", "EE2", "EE3", "EE4", "EE5",
+  "FC1", "FC2", "FC3",
+  "SI1", "SI2", "SI3", "SI4", "SI5"
+)
+
+omega(df_final[, vars_acceptance])
+
+
+# AI_CT
+
+mod <- 'AI_CT_F =~ AI_CT1 + AI_CT2 + AI_CT3 + AI_CT4 + AI_CT5 + AI_CT6 + 
+        AI_CT7 + AI_CT8 + AI_CT9 + AI_CT10 + AI_CT11 + AI_CT12 + AI_CT13 + AI_CT14 + AI_CT15 + AI_CT16 + AI_CT17 + AI_CT18 + AI_CT19 + AI_CT20 + AI_CT21 + AI_CT22 + AI_CT23 + AI_CT24 + AI_CT25 + AI_CT26 + AI_CT27'
+
+fit <- cfa(mod, df_final, estimator="MLR")
+summary(fit, standardized=TRUE, fit.measures=TRUE)
+
+factor_scores <- lavPredict(fit, newdata = df_final, type = "lv", se = "standard") 
+
+df_final$AI_CT_F <- factor_scores
+
+vars_CT <- c(
+  "AI_CT1", "AI_CT2", "AI_CT3",
+  "AI_CT4", "AI_CT5", "AI_CT6",
+  "AI_CT7", "AI_CT8", "AI_CT9", "AI_CT10",
+  "AI_CT11", "AI_CT12", "AI_CT13", "AI_CT14",
+  "AI_CT15", "AI_CT16", "AI_CT17", "AI_CT18", "AI_CT19",
+  "AI_CT20", "AI_CT21",
+  "AI_CT22", "AI_CT23", "AI_CT24","AI_CT25",
+  "AI_CT26", "AI_CT27"
+)
+
+omega(df_final[, vars_CT])
+
+
+# Embeddedness
+
+df_final$frequency <- factor(
+  df_final$frequency,
+  levels = c('Several times a month or less', 
+             'Several times a week, but not every day', 
+             'About once a day', 
+             'Multiple times a day'), 
+  ordered = TRUE
+)
+
+mod <- '
+embed_F =~ scenario_diversity + activity_diversity + AI_diversity + frequency'
+
+fit <- cfa(mod, data = df_final, ordered = c('frequency'))
+summary(fit, standardized=TRUE, fit.measures=TRUE)
+
+factor_scores <- lavPredict(fit, newdata = df_final, type = "lv") 
+df_final$embed_F <- factor_scores[,1]
+
+# Trust
+
+mod <- '
+F_trust =~ trust1 + trust2 + trust3 + trust4 + trust5 + trust6 + trust7 + trust8 + trust9 + trust10 + trust11'
+
+fit <- cfa(mod, df_final, estimator="MLR")
+summary(fit, standardized=TRUE, fit.measures=TRUE)
+
+factor_scores <- lavPredict(fit, newdata = df_final, type = "lv", se = "standard") 
+
+df_final$F_trust<- factor_scores[,1]
+
+vars_trust <- c(
+  "trust1", "trust2", "trust3",
+  "trust4", "trust5", "trust6",
+  "trust7", "trust8", "trust9", "trust10",
+  "trust11"
+)
+
+omega(df_final[, vars_trust])
+
+#------trajectory-----
+
+plot_accept <- df_final %>%
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_accept = mean(Acceptance_F, na.rm = TRUE), 
+    sd_accept = mean(Acceptance_F, na.rm = TRUE), 
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>% 
+  mutate(Time_Index = row_number())
+
+p_accept <- ggplot(plot_accept, aes(x = Time_Index, y = mean_accept)) +
+  geom_line(color = "gray80", linetype = "dashed") + 
+  geom_point(size = 3, color = "gray80") +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "gray40", 
+    size = 2
+  ) +
+  scale_x_continuous(
+    breaks = plot_accept$Time_Index, 
+    labels = as.character(plot_accept$first_regular_quarter),
+    expand = expansion(mult = c(0.10, 0.10))
+  ) +
+  scale_y_continuous(
+    breaks = round(seq(-0.3, 0.2, by = 0.1), 1)
+  ) +
+  coord_cartesian(ylim = c(-0.35, 0.2)) + 
+  theme_minimal() +
+  labs(
+    title = " ",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5,size=10),
+    axis.text.y = element_text(size=11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+plot_embed <- df_final %>%
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_inte = mean(embed_F, na.rm = TRUE),
+    sd_inte = sd(embed_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>% 
+  mutate(Time_Index = row_number())     
+
+p_embed <- ggplot(plot_embed, aes(x = Time_Index, y = mean_inte)) +
+  geom_line(color = "gray80", linetype = "dashed") + 
+  geom_point(size = 3, color = "gray80") +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "#6B9BD1",
+    size = 2
+  ) +
+  scale_x_continuous(
+    breaks = plot_embed$Time_Index, 
+    labels = as.character(plot_embed$first_regular_quarter),
+    expand = expansion(mult = c(0.10, 0.10))
+  ) +
+  scale_y_continuous(
+    breaks = round(seq(-0.5, 0.3, by = 0.2), 1)
+  ) +
+  coord_cartesian(ylim = c(-0.55, 0.3)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5,size=10),
+    axis.text.y = element_text(size=11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  ) + 
+  labs(
+    title = " ",
+    x = " ",
+    y = " "
+  )
+
+
+plot_CT <- df_final %>%
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_CT1 = mean(AI_CT_F, na.rm = TRUE),
+    sd_CT1 = sd(AI_CT_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>% 
+  mutate(Time_Index = row_number())     
+
+p_CT <- ggplot(plot_CT, aes(x = Time_Index, y = mean_CT1)) +
+  geom_line(color = "gray80", linetype = "dashed") + 
+  geom_point(size = 3, color = "gray80") +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "#56C596",
+    size = 2
+  ) +
+  scale_x_continuous(
+    breaks = plot_CT$Time_Index, 
+    labels = as.character(plot_CT$first_regular_quarter),
+    expand = expansion(mult = c(0.10, 0.10))
+  ) +
+  coord_cartesian(ylim = c(-0.3, 0.25)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5,size=10),
+    axis.text.y = element_text(size=11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  ) + 
+  labs(
+    title = " ",
+    x = " ",
+    y = " "
+  )
+
+
+plot_trust <- df_final %>%
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_trust = mean(F_trust, na.rm = TRUE),
+    sd_trust = sd(F_trust, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_trust <- ggplot(plot_trust, aes(x = Time_Index, y = mean_trust)) +
+  geom_line(color = "gray80", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray80", size = 3) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "black", 
+    size = 2
+  ) +
+  scale_x_continuous(
+    breaks = plot_trust$Time_Index, 
+    labels = as.character(plot_trust$first_regular_quarter),
+    expand = expansion(mult = c(0.10, 0.10))
+  ) +
+  coord_cartesian(ylim = c(-0.6, 0.40)) + 
+  theme_minimal() +
+  labs(
+    title = " ",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5,size=10),
+    axis.text.y = element_text(size=11),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+library(gridExtra)
+library(grid)
+
+p_all <- arrangeGrob(
+  p_accept, p_embed, p_CT, p_trust,
+  p_accept, p_embed, p_CT, p_trust,
+  p_accept, p_embed, p_CT, p_trust,
+  ncol = 4
+)
+
+dev.new(width = 16, height = 10)
+grid.draw(p_all)
+
+ggsave(
+  filename = "all_var_trajectory.png",
+  plot = p_all,
+  width = 16,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+#------mediation effects------
+
+model_path <- '
+  embed_F ~ a1*Acceptance_F
+  AI_CT_F ~ a2*Acceptance_F 
+  
+  F_trust ~ b1*embed_F + b2*AI_CT_F + cprime1*Acceptance_F
+  
+  ind_F1    := a1*b1
+  ind_F2    := a2*b2
+'
+
+group0 <- df_final[df_final$first_regular_quarter %in% c("2025-Q3","2025-Q4","2026-Q1","2026-Q2"), ] 
+
+mediation_mod0 <- sem(model_path, data = group0,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+#summary(mediation_mod0, standardized = TRUE, fit.measures = TRUE)
+
+group1 <- df_final[df_final$first_regular_quarter %in% c("2025-Q2","2025-Q3","2025-Q4","2026-Q1"), ] 
+
+mediation_mod1 <- sem(model_path, data = group1,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group2 <- df_final[df_final$first_regular_quarter %in% 
+c("2025-Q1","2025-Q2", "2025-Q3","2025-Q4"), ]
+
+mediation_mod2 <- sem(model_path, data = group2,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group3 <- df_final[df_final$first_regular_quarter %in% c( "2024-Q4","2025-Q1","2025-Q2","2025-Q3"), ]
+
+mediation_mod3 <- sem(model_path, data = group3,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group4 <- df_final[df_final$first_regular_quarter %in% c( "2024-Q3","2024-Q4","2025-Q1","2025-Q2"), ]
+
+mediation_mod4 <- sem(model_path, data = group4,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+#summary(mediation_mod4, standardized = TRUE, fit.measures = TRUE)
+
+
+group5 <- df_final[df_final$first_regular_quarter %in% c( "2024-Q2","2024-Q3",'2024-Q4',"2025-Q1"), ]
+
+mediation_mod5 <- sem(model_path, data = group5,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+group6 <- df_final[df_final$first_regular_quarter %in% c( "2024-Q1","2024-Q2",'2024-Q3','2024-Q4'), ]
+
+mediation_mod6 <- sem(model_path, data = group6,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group7 <- df_final[df_final$first_regular_quarter %in% c( '2023-Q4',"2024-Q1",'2024-Q2','2024-Q3'), ]
+
+mediation_mod7 <- sem(model_path, data = group7,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group8 <- df_final[df_final$first_regular_quarter %in% c( '2023-Q3','2023-Q4','2024-Q1','2024-Q2'), ]
+
+mediation_mod8 <- sem(model_path, data = group8,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group9 <- df_final[df_final$first_regular_quarter %in% c('2023-Q2','2023-Q3','2023-Q4','2024-Q1'), ]
+
+mediation_mod9 <- sem(model_path, data = group9,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+#summary(mediation_mod9, standardized = TRUE, fit.measures = TRUE)
+
+#------coefficients trend------
+
+library(purrr)
+
+models_list <- list(
+  "25_3 to 26_2" = mediation_mod0,
+  "25_2 to 26_1" = mediation_mod1,
+  "25_1 to 25_4" = mediation_mod2,
+  "24_4 to 25_3" = mediation_mod3,
+  "24_3 to 25_2" = mediation_mod4,
+  "24_2 to 25_1" = mediation_mod5,
+  "24_1 to 24_4" = mediation_mod6,
+  "23_4 to 24_3" = mediation_mod7,
+  "23_3 to 24_2" = mediation_mod8,
+  "23_2 to 24_1" = mediation_mod9
+)
+
+coef_order <- c("a1", "a2", "b1", "b2", "cprime1", "ind_F1", "ind_F2")
+
+extract_coefs <- function(mod, col_name) {
+  lavaan::parameterEstimates(mod) %>%
+    dplyr::filter(label %in% coef_order) %>%
+    dplyr::select(label, est, pvalue) %>%
+    dplyr::rename(
+      !!paste0(col_name, "_est") := est,
+      !!paste0(col_name, "_p") := pvalue
+    )
+}
+
+final_table <- purrr::imap(models_list, extract_coefs) %>%
+  purrr::reduce(dplyr::full_join, by = "label") %>%
+  dplyr::arrange(match(label, coef_order))
+
+a1_values <- final_table %>%
+  dplyr::filter(label == "a1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+a1_pvalues <- final_table %>%
+  dplyr::filter(label == "a1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+a2_values <- final_table %>%
+  dplyr::filter(label == "a2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+a2_pvalues <- final_table %>%
+  dplyr::filter(label == "a2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+b1_values <- final_table %>%
+  dplyr::filter(label == "b1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+b1_pvalues <- final_table %>%
+  dplyr::filter(label == "b1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+b2_values <- final_table %>%
+  dplyr::filter(label == "b2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+b2_pvalues <- final_table %>%
+  dplyr::filter(label == "b2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+c_values <- final_table %>%
+  dplyr::filter(label == "cprime1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+c_pvalues <- final_table %>%
+  dplyr::filter(label == "cprime1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+ind1_values <- final_table %>%
+  dplyr::filter(label == "ind_F1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+ind1_pvalues <- final_table %>%
+  dplyr::filter(label == "ind_F1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+ind2_values <- final_table %>%
+  dplyr::filter(label == "ind_F2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+ind2_pvalues <- final_table %>%
+  dplyr::filter(label == "ind_F2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+x_labels <- c("25-Q3 to 26-Q2", "25-Q2 to 26-Q1", "25-Q1 to 25-Q4", 
+              "24-Q4 to 25-Q3", "24-Q3 to 25-Q2", "24-Q2 to 25-Q1", 
+              "24-Q1 to 24-Q4", "23-Q4 to 24-Q3", "23-Q3 to 24-Q2", 
+              "23-Q2 to 24-Q1")
+
+
+df_c <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Value = c_values,
+  Pvalue = c_pvalues,
+  Group = 1
+)
+
+p_c <- ggplot(df_c, aes(x = Period, y = Value, group = Group)) +
+  geom_line(color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    method = "loess",
+    span = 1,
+    color = "gray40",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_y_continuous(limits = c(0.8, 1.80001), expand = c(0, 0)) + 
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9,color = "black"),
+    axis.text.y = element_text(size = 8, hjust = 0.9,color = "black"),
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    axis.title.y = element_text(size = 11,color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Direct Effect",
+    x = " ",
+    y = "Effect (c)"
+  )
+
+
+df_ind1 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Value = ind1_values,
+  Pvalue = ind1_pvalues,
+  Group = 1
+)
+
+p_ind1 <- ggplot(df_ind1, aes(x = Period, y = Value, group = Group)) +
+  geom_line(color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    method = "loess",
+    span = 1,
+    color = "#6B9BD1",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_y_continuous(limits = c(0, 0.12), expand = c(0, 0)) + 
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9,color = "black"),
+    axis.text.y = element_text(size = 8, hjust = 0.9,color = "black"),
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    axis.title.y = element_text(size = 11,color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Mediation Effect via Embeddedness",
+    x = " ",
+    y = "Effect (a1 x b1)"
+  )
+
+
+df_ind2 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Value = ind2_values,
+  Pvalue = ind2_pvalues,
+  Group = 1
+)
+
+p_ind2 <- ggplot(df_ind2, aes(x = Period, y = Value, group = Group)) +
+  geom_line(color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    method = "loess",
+    span = 1,
+    color = "#56C596",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_y_continuous(limits = c(0.1, 0.70001),expand = c(0, 0)
+)+ 
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9,color = "black"),
+    axis.text.y = element_text(size = 8, hjust = 0.9,color = "black"),
+    plot.title = element_text(face = "bold", size = 12, hjust = 0.5),
+    axis.title.y = element_text(size = 11,color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Mediation Effect via Critical Thinking",
+    x = "",
+    y = "Effect (a2 x b2)"
+  )
+
+
+p_all_ind <- arrangeGrob(
+  p_ind1, p_ind2, p_c, p_c,
+  p_ind1, p_ind2, p_c, p_c,
+  p_ind1, p_ind2, p_c, p_c,
+  ncol = 4
+)
+
+dev.new(width = 14, height = 10)
+grid.draw(p_all_ind)
+
+ggsave(
+  filename = "all_effect_trajectory.png",
+  plot = p_all_ind,
+  width = 16,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+
+df_a1 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Value = a1_values,
+  Pvalue = a1_pvalues,
+  Group = 1
+)
+
+p_a1 <- ggplot(df_a1, aes(x = Period, y = Value, group = Group)) +
+  geom_line(color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    method = "loess",
+    span = 1,
+    color = "#6B9BD1",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_y_continuous(limits = c(0, 0.5), expand = c(0, 0)) +  #c(-0.2, 0.5)       
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.text.x = element_text(size = 11, angle = 45, hjust = 0.9,color = "black"),
+    axis.text.y = element_text(size = 11, hjust = 0.9,color = "black"),
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    axis.title.y = element_text(size = 15,color = "black"),
+    axis.title.x = element_text(size = 15,color = "black") 
+  ) +
+  labs(
+    title = "Acceptance -> Embeddedness",
+    x = " ",
+    y = "Coefficient (a1)"
+  )
+
+
+df_a2 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Value = a2_values,
+  Pvalue = a2_pvalues,
+  Group = 1
+)
+
+p_a2 <- ggplot(df_a2, aes(x = Period, y = Value, group = Group)) +
+  geom_line(color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    method = "loess",
+    span = 1,
+    color = "#56C596",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_y_continuous(limits = c(0.5, 1), expand = c(0, 0)) +    
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 11, angle = 45, hjust = 0.9,color = "black"),
+    axis.text.y = element_text(size = 11, hjust = 0.9,color = "black"),
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    axis.title.y = element_text(size = 15,color = "black"),
+    axis.title.x = element_text(size = 15,color = "black") 
+  ) +
+  labs(
+    title = "Acceptance -> Critical Thinking",
+    x = " ",
+    y = "Coefficient (a2)"
+  )
+
+
+df_b1 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Value = b1_values,
+  Pvalue = b1_pvalues,
+  Group = 1
+)
+
+p_b1 <- ggplot(df_b1, aes(x = Period, y = Value, group = Group)) +
+  geom_line(color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    method = "loess",
+    span = 1,
+    color = "#6B9BD1",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_y_continuous(limits = c(0, 0.5), expand = c(0, 0)) +  
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 11, angle = 45, hjust = 0.9,color = "black"),
+    axis.text.y = element_text(size = 11, hjust = 0.9,color = "black"),
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    axis.title.y = element_text(size = 15,color = "black"),
+    axis.title.x = element_text(size = 15,color = "black") 
+  ) +
+  labs(
+    title = "Embeddedness -> Trust",
+    x = " ",
+    y = "Coefficient (b1)"
+  )
+
+
+df_b2 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Value = b2_values,
+  Pvalue = b2_pvalues,
+  Group = 1
+)
+
+p_b2 <- ggplot(df_b2, aes(x = Period, y = Value, group = Group)) +
+  geom_line(color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    method = "loess",
+    span = 1,
+    color = "#56C596",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_y_continuous(limits = c(0, 0.8), expand = c(0, 0)) +      
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.ticks = element_line(color = "black", linewidth = 0.5),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 11, angle = 45, hjust = 0.9,color = "black"),
+    axis.text.y = element_text(size = 11, hjust = 0.9,color = "black"),
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    axis.title.y = element_text(size = 15,color = "black"),
+    axis.title.x = element_text(size = 15,color = "black") 
+  ) +
+  labs(
+    title = "Critical Thinking -> Trust",
+    x = " ",
+    y = "Coefficient (b2)"
+  )
+
+
+p_all_ind <- arrangeGrob(
+  p_a1, p_a2, p_b1, p_b2,
+  p_a1, p_a2, p_b1, p_b2,
+  p_a1, p_a2, p_b1, p_b2,
+  ncol = 4
+)
+
+dev.new(width = 14, height = 10)
+grid.draw(p_all_ind)
+
+ggsave(
+  filename = "all_coef_trajectory.png",
+  plot = p_all_ind,
+  width = 14,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+```
+
+```{r Study 4: AI Models}
+
+#-----Trajectory: Trust------
+
+df_final %>%
+  mutate(
+    group = ifelse(GPT + Claude + Gemini >= 1, "high", "other")
+  ) %>%
+  group_by(first_regular_quarter, group) %>%
+  summarise(
+    mean_F_trust = mean(F_trust, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = mean_F_trust,
+    names_prefix = "mean_"
+  ) %>%
+  mutate(
+    diff = mean_high - mean_other
+  ) %>%
+  mutate(
+    across(c(mean_high, mean_other, diff), ~ round(.x, 3))
+  )
+
+
+plot_trust_advance <- df_final %>%
+  filter(GPT + Claude + Gemini >= 1) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_trust = mean(F_trust, na.rm = TRUE),
+    sd_trust = sd(F_trust, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+df_final %>%
+  filter(GPT + Claude + Gemini < 1) %>%
+  summarise(n_people = n())
+
+p_trust_advanced <- ggplot(plot_trust_advance, aes(x = Time_Index, y = mean_trust)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "black", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_trust_advance$Time_Index, 
+                     labels = as.character(plot_trust_advance$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.8, 0.6)) + 
+  theme_minimal() +
+  labs(
+    title = "Trust in AI",
+    x = " ",
+    y = " "
+  ) +
+    theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10,color = "black",),
+    axis.text.y = element_text(size = 10,color = "black",),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+plot_trust_other <- df_final %>%
+  filter(GPT + Claude + Gemini == 0) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_trust = mean(F_trust, na.rm = TRUE),
+    sd_trust = sd(F_trust, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_trust_other <- ggplot(plot_trust_other, aes(x = Time_Index, y = mean_trust)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "black", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_trust_advance$Time_Index, 
+                     labels = as.character(plot_trust_advance$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.8, 0.6)) + 
+  theme_minimal() +
+  labs(
+    title = "Trust in AI",
+    x = " ",
+    y = " "
+  ) +
+      theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10,color = "black"),
+    axis.text.y = element_text(size = 10,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+#-----Trajectory: Embeddedness-------
+
+df_final %>%
+  mutate(
+    group = ifelse(GPT + Claude + Gemini >= 1, "high", "other")
+  ) %>%
+  group_by(first_regular_quarter, group) %>%
+  summarise(
+    mean_F_embed = mean(embed_F, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = mean_F_embed,
+    names_prefix = "mean_"
+  ) %>%
+  mutate(
+    diff = mean_high - mean_other
+  ) %>%
+  mutate(
+    across(c(mean_high, mean_other, diff), ~ round(.x, 3))
+  )
+
+plot_EM_advance <- df_final %>%
+  filter(GPT + Claude + Gemini >= 1) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(embed_F, na.rm = TRUE),
+    sd = sd(embed_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_EM_advanced <- ggplot(plot_EM_advance, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "#6B9BD1", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_EM_advance$Time_Index, 
+                     labels = as.character(plot_EM_advance$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.7, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = "AI Use Embeddedness",
+    x = " ",
+    y = " "
+  ) +
+    theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10,color = "black"),
+    axis.text.y = element_text(size = 10,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+plot_EM_other <- df_final %>%
+  filter(GPT + Claude + Gemini == 0) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(embed_F, na.rm = TRUE),
+    sd = sd(embed_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_EM_other <- ggplot(plot_EM_other, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "#6B9BD1", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_EM_other$Time_Index, 
+                     labels = as.character(plot_EM_other$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.7, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = "AI Use Embeddedness",
+    x = " ",
+    y = " "
+  ) +
+    theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10,color = "black"),
+    axis.text.y = element_text(size =10,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+#-----Trajectory: Critical Thinking-----
+
+df_final %>%
+  mutate(
+    group = ifelse(GPT + Claude + Gemini >= 1, "high", "other")
+  ) %>%
+  group_by(first_regular_quarter, group) %>%
+  summarise(
+    mean_F_CT = mean(AI_CT_F, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = mean_F_CT,
+    names_prefix = "mean_"
+  ) %>%
+  mutate(
+    diff = mean_high - mean_other
+  ) %>%
+  mutate(
+    across(c(mean_high, mean_other, diff), ~ round(.x, 3))
+  )
+
+
+plot_CT_advance <- df_final %>%
+  filter(GPT + Claude + Gemini >= 1) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(AI_CT_F, na.rm = TRUE),
+    sd = sd(AI_CT_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_CT_advanced <- ggplot(plot_CT_advance, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "#56C596", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_CT_advance$Time_Index, 
+                     labels = as.character(plot_CT_advance$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.3, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = "Critical Thinking in AI use",
+    x = " ",
+    y = " "
+  ) +
+    theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10,color = "black"),
+    axis.text.y = element_text(size = 10,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+plot_CT_other <- df_final %>%
+  filter(GPT + Claude + Gemini == 0) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(AI_CT_F, na.rm = TRUE),
+    sd = sd(AI_CT_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_CT_other <- ggplot(plot_CT_other, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "#56C596", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_CT_other$Time_Index, 
+                     labels = as.character(plot_CT_other$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.3, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = "Critical Thinking in AI use",
+    x = " ",
+    y = " "
+  ) +
+    theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10,color = "black"),
+    axis.text.y = element_text(size = 10,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+#-----Trajectory: Acceptance-----
+
+df_final %>%
+  mutate(
+    group = ifelse(GPT + Claude + Gemini >= 1, "high", "other")
+  ) %>%
+  group_by(first_regular_quarter, group) %>%
+  summarise(
+    mean_F_Accep = mean(Acceptance_F, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = mean_F_Accep,
+    names_prefix = "mean_"
+  ) %>%
+  mutate(
+    diff = mean_high - mean_other
+  ) %>%
+  mutate(
+    across(c(mean_high, mean_other, diff), ~ round(.x, 3))
+  )
+
+
+plot_accept_advance <- df_final %>%
+  filter(GPT + Claude + Gemini >= 1) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(Acceptance_F, na.rm = TRUE),
+    sd = sd(Acceptance_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_accept_advanced <- ggplot(plot_accept_advance, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "gray40", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_accept_advance$Time_Index, 
+                     labels = as.character(plot_accept_advance$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.4, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = 'Acceptance of AI',
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10,color = "black"),
+    axis.text.y = element_text(size = 10,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+plot_accept_other <- df_final %>%
+  filter(GPT + Claude + Gemini == 0) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(Acceptance_F, na.rm = TRUE),
+    sd = sd(Acceptance_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_accept_other <- ggplot(plot_accept_other, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "gray40", 
+    size = 3.5
+  ) +
+  scale_x_continuous(
+    breaks = plot_accept_other$Time_Index, 
+    labels = as.character(plot_accept_other$first_regular_quarter)
+  ) +
+  coord_cartesian(ylim = c(-0.4, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = 'Acceptance of AI',#"Users of Other Models Only",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10,color = "black"),
+    axis.text.y = element_text(size = 10,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+library(gridExtra)
+library(grid)
+
+p_model <- arrangeGrob(p_accept_advanced,p_EM_advanced,p_CT_advanced,p_trust_advanced,
+                     p_accept_other,p_EM_other,p_CT_other,p_trust_other,
+                     p_accept_other,p_EM_other,p_CT_other,p_trust_other,
+                     ncol = 4)
+
+dev.new(width = 16, height = 10)
+grid.draw(p_model)
+
+ggsave(
+  filename = "p_model.png",
+  plot = p_model,
+  width = 16,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+#-----variable trajectory difference test----
+
+# trust
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  data %>%
+    mutate(
+      group = ifelse(GPT + Claude + Gemini >= 1, "high", "other"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(F_trust, na.rm = TRUE),
+      n = sum(!is.na(F_trust)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "high")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "other")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+trust_models_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+
+ymax_trust_models <- max(abs(c(trust_models_diff$lower, trust_models_diff$upper, trust_models_diff$diff)), na.rm = TRUE)
+
+p_trust_models_diff <- ggplot(trust_models_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linewidth = 1,
+    linetype = "dashed"
+  ) +
+  geom_line(
+    color = "black",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_trust_models, ymax_trust_models),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),  
+    axis.ticks.x = element_line(color = "black"), 
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_trust_models_diff)
+
+
+# Embeddedness
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  data %>%
+    mutate(
+      group = ifelse(GPT + Claude + Gemini >= 1, "high", "other"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(embed_F, na.rm = TRUE),
+      n = sum(!is.na(embed_F)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "high")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "other")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+embed_models_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+
+ymax_embed_models <- max(abs(c(embed_models_diff$lower, embed_models_diff$upper, embed_models_diff$diff)), na.rm = TRUE)
+
+p_embed_models_diff <- ggplot(embed_models_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "#6B9BD1",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_embed_models, ymax_embed_models),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_embed_models_diff)
+
+
+
+# CT
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  data %>%
+    mutate(
+      group = ifelse(GPT + Claude + Gemini >= 1, "high", "other"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(AI_CT_F, na.rm = TRUE),
+      n = sum(!is.na(AI_CT_F)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "high")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "other")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+CT_models_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+
+ymax_CT_models <- max(abs(c(CT_models_diff$lower, CT_models_diff$upper, CT_models_diff$diff)), na.rm = TRUE)
+
+p_CT_models_diff <- ggplot(CT_models_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "#56C596",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_CT_models, ymax_CT_models),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_CT_models_diff)
+
+
+
+# Acceptance
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  data %>%
+    mutate(
+      group = ifelse(GPT + Claude + Gemini >= 1, "high", "other"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(Acceptance_F, na.rm = TRUE),
+      n = sum(!is.na(Acceptance_F)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "high")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "other")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+accept_models_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+
+ymax_accept_models <- max(abs(c(accept_models_diff$lower, accept_models_diff$upper, accept_models_diff$diff)), na.rm = TRUE)
+
+p_accept_models_diff <- ggplot(accept_models_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "gray40",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_accept_models, ymax_accept_models),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_accept_models_diff)
+
+
+#-----mediation effects (high)------
+
+advance <- df_final %>%
+  filter(GPT + Claude + Gemini >= 1) 
+
+group0 <- advance[advance$first_regular_quarter %in% c("2025-Q3","2025-Q4","2026-Q1","2026-Q2"), ] 
+
+mediation_mod0_advance <- sem(model_path, data = group0,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group1 <- advance[advance$first_regular_quarter %in% c("2025-Q2","2025-Q3","2025-Q4","2026-Q1"), ] 
+
+mediation_mod1_advance <- sem(model_path, data = group1,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group2 <- advance[advance$first_regular_quarter %in% c("2025-Q1","2025-Q2", "2025-Q3","2025-Q4"), ]
+
+mediation_mod2_advance <- sem(model_path, data = group2,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group3 <- advance[advance$first_regular_quarter %in% c( "2024-Q4","2025-Q1","2025-Q2","2025-Q3"), ]
+
+mediation_mod3_advance <- sem(model_path, data = group3,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group4 <- advance[advance$first_regular_quarter %in% c( "2024-Q3","2024-Q4","2025-Q2","2025-Q1"), ]
+
+mediation_mod4_advance <- sem(model_path, data = group4,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group5 <- advance[advance$first_regular_quarter %in% c( "2024-Q2","2024-Q3",'2024-Q4',"2025-Q1"), ]
+
+mediation_mod5_advance <- sem(model_path, data = group5,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group6 <- advance[advance$first_regular_quarter %in% c( "2024-Q1","2024-Q2",'2024-Q3','2024-Q4'), ]
+
+mediation_mod6_advance <- sem(model_path, data = group6,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group7 <- advance[advance$first_regular_quarter %in% c( '2023-Q4',"2024-Q1",'2024-Q2','2024-Q3'), ]
+
+mediation_mod7_advance <- sem(model_path, data = group7,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group8 <- advance[advance$first_regular_quarter %in% c( '2023-Q4','2023-Q3','2024-Q2','2024-Q1'), ]
+
+mediation_mod8_advance <- sem(model_path, data = group8,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group9 <- advance[advance$first_regular_quarter %in% c('2024-Q1','2023-Q4','2023-Q3','2023-Q2'), ]
+
+mediation_mod9_advance <- sem(model_path, data = group9,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+#-----mediation effects (other)------
+
+other <- df_final %>%
+  filter(GPT + Claude + Gemini == 0) 
+
+group0 <- other[other$first_regular_quarter %in% c("2025-Q3","2025-Q4","2026-Q1","2026-Q2"), ] 
+
+mediation_mod0_other <- sem(model_path, data = group0,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group1 <- other[other$first_regular_quarter %in% c("2025-Q2","2025-Q3","2025-Q4","2026-Q1"), ] 
+
+mediation_mod1_other <- sem(model_path, data = group1,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group2 <- other[other$first_regular_quarter %in% c("2025-Q1","2025-Q2", "2025-Q3","2025-Q4"), ]
+
+mediation_mod2_other <- sem(model_path, data = group2,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group3 <- other[other$first_regular_quarter %in% c( "2024-Q4","2025-Q1","2025-Q2","2025-Q3"), ]
+
+mediation_mod3_other <- sem(model_path, data = group3,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group4 <- other[other$first_regular_quarter %in% c( "2024-Q3","2024-Q4","2025-Q2","2025-Q1"), ]
+
+mediation_mod4_other <- sem(model_path, data = group4,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group5 <- other[other$first_regular_quarter %in% c( "2024-Q2","2024-Q3",'2024-Q4',"2025-Q1"), ]
+
+mediation_mod5_other <- sem(model_path, data = group5,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group6 <- other[other$first_regular_quarter %in% c( "2024-Q1","2024-Q2",'2024-Q3','2024-Q4'), ]
+
+mediation_mod6_other <- sem(model_path, data = group6,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group7 <- other[other$first_regular_quarter %in% c( '2023-Q4',"2024-Q1",'2024-Q2','2024-Q3'), ]
+
+mediation_mod7_other <- sem(model_path, data = group7,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group8 <- other[other$first_regular_quarter %in% c( '2023-Q4','2023-Q3','2024-Q2','2024-Q1'), ]
+
+mediation_mod8_other <- sem(model_path, data = group8,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group9 <- other[other$first_regular_quarter %in% c('2024-Q1','2023-Q4','2023-Q3','2023-Q2'), ]
+
+mediation_mod9_other <- sem(model_path, data = group9,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+
+#-----coefficients trend------
+
+models_list <- list(
+  "25_3 to 26_2" = mediation_mod0_advance,
+  "25_2 to 26_1" = mediation_mod1_advance,
+  "25_1 to 25_4" = mediation_mod2_advance,
+  "24_4 to 25_3" = mediation_mod3_advance,
+  "24_3 to 25_2" = mediation_mod4_advance,
+  "24_2 to 25_1" = mediation_mod5_advance,
+  "24_1 to 24_4" = mediation_mod6_advance,
+  "23_4 to 24_3" = mediation_mod7_advance,
+  "23_3 to 24_2" = mediation_mod8_advance,
+  "23_2 to 24_1" = mediation_mod9_advance
+)
+
+models_list <- list(
+  "25_3 to 26_2" = mediation_mod0_other,
+  "25_2 to 26_1" = mediation_mod1_other,
+  "25_1 to 25_4" = mediation_mod2_other,
+  "24_4 to 25_3" = mediation_mod3_other,
+  "24_3 to 25_2" = mediation_mod4_other,
+  "24_2 to 25_1" = mediation_mod5_other,
+  "24_1 to 24_4" = mediation_mod6_other,
+  "23_4 to 24_3" = mediation_mod7_other,
+  "23_3 to 24_2" = mediation_mod8_other,
+  "23_2 to 24_1" = mediation_mod9_other
+)
+
+model_n_other <- purrr::map_int(
+  models_list,
+  ~ sum(lavaan::lavInspect(.x, "nobs"))
+)
+
+coef_order <- c("a1", "a2", "b1", "b2", "cprime1", "ind_F1", "ind_F2")
+
+extract_coefs <- function(mod, col_name) {
+  lavaan::parameterEstimates(mod) %>%
+    dplyr::filter(label %in% coef_order) %>%
+    dplyr::select(label, est, pvalue) %>%
+    dplyr::rename(
+      !!paste0(col_name, "_est") := est,
+      !!paste0(col_name, "_p") := pvalue
+    )
+}
+
+final_table <- purrr::imap(models_list, extract_coefs) %>%
+  purrr::reduce(dplyr::full_join, by = "label") %>%
+  dplyr::arrange(match(label, coef_order))
+
+a1_values <- final_table %>%
+  dplyr::filter(label == "a1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+a1_pvalues <- final_table %>%
+  dplyr::filter(label == "a1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+a2_values <- final_table %>%
+  dplyr::filter(label == "a2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+a2_pvalues <- final_table %>%
+  dplyr::filter(label == "a2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+b1_values <- final_table %>%
+  dplyr::filter(label == "b1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+b1_pvalues <- final_table %>%
+  dplyr::filter(label == "b1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+b2_values <- final_table %>%
+  dplyr::filter(label == "b2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+b2_pvalues <- final_table %>%
+  dplyr::filter(label == "b2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+c_values <- final_table %>%
+  dplyr::filter(label == "cprime1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+c_pvalues <- final_table %>%
+  dplyr::filter(label == "cprime1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+ind1_values <- final_table %>%
+  dplyr::filter(label == "ind_F1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+ind1_pvalues <- final_table %>%
+  dplyr::filter(label == "ind_F1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+ind2_values <- final_table %>%
+  dplyr::filter(label == "ind_F2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+ind2_pvalues <- final_table %>%
+  dplyr::filter(label == "ind_F2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+x_labels <- c("25-Q3 to 26-Q2", "25-Q2 to 26-Q1", "25-Q1 to 25-Q4", 
+              "24-Q4 to 25-Q3", "24-Q3 to 25-Q2", "24-Q2 to 25-Q1", 
+              "24-Q1 to 24-Q4", "23-Q4 to 24-Q3", "23-Q3 to 24-Q2", 
+              "23-Q2 to 24-Q1")
+
+df_c <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Time_Index = seq_along(x_labels),
+  Value = c_values,
+  Pvalue = c_pvalues,
+  n = model_n_other,
+  Group = 1
+)
+
+p_c <- ggplot(df_c, aes(x = Time_Index, y = Value)) +
+  geom_line(aes(group = Group), color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    aes(weight = n),
+    method = "loess",
+    span = 1,
+    color = "gray40",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_x_continuous(
+    breaks = df_c$Time_Index,
+    labels = df_c$Period
+  ) +
+  scale_y_continuous(limits = c(0, 2.5), expand = c(0, 0)) +
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.ticks = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9, color = "black"),
+    axis.text.y = element_text(size = 9, hjust = 0.9, color = "black"),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    axis.title.y = element_text(size = 11, color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Direct Effect From Acceptance",
+    x = " ",
+    y = "Coefficient (c)"
+  )
+
+fit <- loess(
+  Value ~ Time_Index,
+  data = df_c,
+  weights = n,
+  span = 1)
+
+df_c$Predicted <- predict(
+  fit,
+  newdata = data.frame(Time_Index = df_c$Time_Index)
+)
+
+df_c
+
+
+df_ind1 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Time_Index = seq_along(x_labels),
+  Value = ind1_values,
+  Pvalue = ind1_pvalues,
+  n = model_n_other,
+  Group = 1
+)
+
+p_ind1 <- ggplot(df_ind1, aes(x = Time_Index, y = Value)) +
+  geom_line(aes(group = Group), color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    aes(weight = n),
+    method = "loess",
+    span = 1,
+    color = "#6B9BD1",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_x_continuous(
+    breaks = df_ind1$Time_Index,
+    labels = df_ind1$Period
+  ) +
+  scale_y_continuous(limits = c(-0.1, 0.2001), expand = c(0, 0)) +  
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.ticks = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9, color = "black"),
+    axis.text.y = element_text(size = 9, hjust = 0.9, color = "black"),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    axis.title.y = element_text(size = 11, color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Mediation Effect of Embeddedness",
+    x = " ",
+    y = "Coefficient (a1 x b1)"
+  )
+
+fit <- loess(
+  Value ~ Time_Index,
+  data = df_ind1,
+  weights = n,
+  span = 1)
+
+df_ind1$Predicted <- predict(
+  fit,
+  newdata = data.frame(Time_Index = df_ind1$Time_Index)
+)
+
+df_ind1
+
+
+df_ind2 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Time_Index = seq_along(x_labels),
+  Value = ind2_values,
+  Pvalue = ind2_pvalues,
+  n = model_n_other,
+  Group = 1
+)
+
+p_ind2 <- ggplot(df_ind2, aes(x = Time_Index, y = Value)) +
+  geom_line(aes(group = Group), color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    aes(weight = n),
+    method = "loess",
+    span = 1,
+    color = "#56C596",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_x_continuous(
+    breaks = df_ind2$Time_Index,
+    labels = df_ind2$Period
+  ) +
+  scale_y_continuous(limits = c(-0.5, 1), expand = c(0, 0)) +   
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.ticks = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9, color = "black"),
+    axis.text.y = element_text(size = 9, hjust = 0.9, color = "black"),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    axis.title.y = element_text(size = 11, color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Mediation Effect of Critical Thinking",
+    x = "",
+    y = "Coefficient (a2 x b2)"
+  )
+
+fit <- loess(
+  Value ~ Time_Index,
+  data = df_ind2,
+  weights = n,
+  span = 1)
+
+df_ind2$Predicted <- predict(
+  fit,
+  newdata = data.frame(Time_Index = df_ind2$Time_Index)
+)
+
+df_ind2
+
+
+p_ind1 <- p_ind1 + theme(plot.margin = margin(5, 10, 5, 8))
+p_ind2 <- p_ind2 + theme(plot.margin = margin(5, 10, 5, 8))
+p_c    <- p_c    + theme(plot.margin = margin(5, 10, 5, 8))
+
+
+p_effect_model <- arrangeGrob(
+  p_ind1, p_ind2, p_c, p_c,
+  p_ind1, p_ind2, p_c, p_c,
+  p_ind1, p_ind2, p_c, p_c,
+  ncol = 4
+)
+
+dev.new(width = 14, height = 10)
+grid.draw(p_effect_model)
+
+ggsave(
+  filename = "p_effect_model.png",
+  plot = p_effect_model,
+  width = 16,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+```
+
+```{r Study 4: Scenarios}
+
+#------Trajectory: Trust------
+
+sum((df_final$Learning + df_final$Work) >= 70, na.rm = TRUE) # 587
+
+sum((df_final$Learning + df_final$Work) < 70, na.rm = TRUE) # 735
+
+df_final %>%
+  mutate(group = ifelse(Learning + Work >= 70, "outcome", "experience")) %>%
+  group_by(first_regular_quarter, group) %>%
+  summarise(
+    mean_F_trust = mean(F_trust, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = mean_F_trust,
+    names_prefix = "mean_"
+  ) %>%
+  mutate(
+    diff = mean_outcome - mean_experience
+  ) %>%
+  mutate(
+    across(c(mean_outcome, mean_experience, diff), ~ round(.x, 3))
+  )
+
+
+plot_trust_learn_work <- df_final %>%
+  filter(Learning + Work >= 70 
+         ) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_trust = mean(F_trust, na.rm = TRUE),
+    sd_trust = sd(F_trust, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+
+p_trust_learn_work <- ggplot(plot_trust_learn_work, aes(x = Time_Index, y = mean_trust)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "black", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_trust_learn_work$Time_Index, 
+                     labels = as.character(plot_trust_learn_work$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.6, 0.5)) + 
+    theme_minimal() +
+  labs(
+    title = "Learning+Work",
+    x = " ",
+    y = " "
+  ) +
+    theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+plot_trust_other_scenarios <- df_final %>%
+  filter(Learning + Work < 70 
+         ) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_trust = mean(F_trust, na.rm = TRUE),
+    sd_trust = sd(F_trust, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_trust_other_scenarios <- ggplot(plot_trust_other_scenarios, aes(x = Time_Index, y = mean_trust)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "black", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_trust_other_scenarios$Time_Index, 
+                     labels = as.character(plot_trust_other_scenarios$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.6, 0.5)) + 
+  theme_minimal() +
+  labs(
+    title = "Life, Hobby, and Relationship",
+    x = "",
+    y = ""
+  ) +
+      theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+#------Trajectory: Embeddedness-------
+
+df_final %>%
+  mutate(group = ifelse(Learning + Work >= 70, "outcome", "experience")) %>%
+  group_by(first_regular_quarter, group) %>%
+  summarise(
+    mean_F_embed = mean(embed_F, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = mean_F_embed,
+    names_prefix = "mean_"
+  ) %>%
+  mutate(
+    diff = mean_outcome - mean_experience
+  ) %>%
+  mutate(
+    across(c(mean_outcome, mean_experience, diff), ~ round(.x, 3))
+  )
+
+
+plot_EM_learn_work <- df_final %>%
+  filter(Learning + Work >= 70) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(embed_F, na.rm = TRUE),
+    sd = sd(embed_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_EM_learn_work <- ggplot(plot_EM_learn_work, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "#6B9BD1", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_EM_learn_work$Time_Index, 
+                     labels = as.character(plot_EM_learn_work$first_regular_quarter)) +
+  scale_y_continuous(
+    breaks = seq(-0.8, 0.4, by = 0.2)
+  ) +
+  coord_cartesian(ylim = c(-0.9, 0.4)) + 
+  theme_minimal() +
+  labs(
+    title = "Study + Work",
+    x = "",
+    y = ""
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+plot_EM_other_scenarios <- df_final %>%
+  filter(Learning + Work < 70) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(embed_F, na.rm = TRUE),
+    sd = sd(embed_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_EM_other_scenarios <- ggplot(plot_EM_other_scenarios, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "#6B9BD1", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_EM_other_scenarios$Time_Index, 
+                     labels = as.character(plot_EM_other_scenarios$first_regular_quarter)) +
+  scale_y_continuous(
+    breaks = seq(-0.8, 0.4, by = 0.2)
+  ) +
+  coord_cartesian(ylim = c(-0.9, 0.4)) + 
+  theme_minimal() +
+  labs(
+    title = "Other Scenarios",
+    x = "",
+    y = ""
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+#------Trajectory: Critical Thinking-------
+
+df_final %>%
+  mutate(group = ifelse(Learning + Work >= 70, "outcome", "experience")) %>%
+  group_by(first_regular_quarter, group) %>%
+  summarise(
+    mean_F_CT = mean(AI_CT_F, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = mean_F_CT,
+    names_prefix = "mean_"
+  ) %>%
+  mutate(
+    diff = mean_outcome - mean_experience
+  ) %>%
+  mutate(
+    across(c(mean_outcome, mean_experience, diff), ~ round(.x, 3))
+  )
+
+
+plot_CT_learn_work <- df_final %>%
+  filter(Learning + Work >= 70 
+         ) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_CT = mean(AI_CT_F, na.rm = TRUE),
+    sd_CT = sd(AI_CT_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_CT_learn_work <- ggplot(plot_CT_learn_work, aes(x = Time_Index, y = mean_CT)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "#56C596", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_CT_learn_work$Time_Index, 
+                     labels = as.character(plot_CT_learn_work$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.3, 0.25)) + 
+  theme_minimal() +
+  labs(
+    title = "Study + Work",
+    x = "",
+    y = ""
+  ) +
+        theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+plot_CT_other_scenarios <- df_final %>%
+  filter(Learning + Work < 70 
+         ) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean_CT = mean(AI_CT_F, na.rm = TRUE),
+    sd_CT = sd(AI_CT_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_CT_other_scenarios <- ggplot(plot_CT_other_scenarios, aes(x = Time_Index, y = mean_CT)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "#56C596", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_CT_other_scenarios$Time_Index, 
+                     labels = as.character(plot_CT_other_scenarios$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.3, 0.25)) + 
+  theme_minimal() +
+  labs(
+    title = "Other Scenarios",
+    x = "",
+    y = ""
+  ) +
+        theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+#------Trajectory: Acceptance-------
+
+df_final %>%
+  mutate(group = ifelse(Learning + Work >= 70, "outcome", "experience")) %>%
+  group_by(first_regular_quarter, group) %>%
+  summarise(
+    mean_F_accept = mean(Acceptance_F, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = group,
+    values_from = mean_F_accept,
+    names_prefix = "mean_"
+  ) %>%
+  mutate(
+    diff = mean_outcome - mean_experience
+  ) %>%
+  mutate(
+    across(c(mean_outcome, mean_experience, diff), ~ round(.x, 3))
+  )
+
+
+plot_accept_learn_work <- df_final %>%
+  filter(Learning + Work >= 70) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(Acceptance_F, na.rm = TRUE),
+    sd = sd(Acceptance_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_accept_learn_work <- ggplot(plot_accept_learn_work, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "gray40", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_accept_learn_work$Time_Index, 
+                     labels = as.character(plot_accept_learn_work$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.5, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = "Study + Work",
+    x = "",
+    y = ""
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+plot_accept_other_scenarios <- df_final %>%
+  filter(Learning + Work < 70) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(Acceptance_F, na.rm = TRUE),
+    sd = sd(Acceptance_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_accept_other_scenarios <- ggplot(plot_accept_other_scenarios, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "gray40", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_accept_other_scenarios$Time_Index, 
+                     labels = as.character(plot_accept_other_scenarios$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.5, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = "Other Scenarios",
+    x = "",
+    y = ""
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+library(gridExtra)
+library(grid)
+
+p_scenario <- arrangeGrob(
+p_trust_learn_work,p_EM_learn_work,p_CT_learn_work,p_accept_learn_work,
+p_trust_other_scenarios,p_EM_other_scenarios,p_CT_other_scenarios,p_accept_other_scenarios,
+p_trust_other_scenarios,p_EM_other_scenarios,p_CT_other_scenarios,p_accept_other_scenarios,ncol = 4)
+
+dev.new(width = 16, height = 10)
+grid.draw(p_scenario)
+
+ggsave(
+  filename = "p_scenario.png",
+  plot = p_scenario,
+  width = 16,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+
+#------mediation effects (Learning/work)------
+
+LearnWork <- df_final %>%
+  filter(Learning + Work >= 70)
+         
+group0 <- LearnWork[LearnWork$first_regular_quarter %in% c("2025-Q3","2025-Q4","2026-Q1","2026-Q2"), ] 
+
+mediation_mod0_LearnWork <- sem(model_path, data = group0,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group1 <- LearnWork[LearnWork$first_regular_quarter %in% c("2025-Q2","2025-Q3","2025-Q4","2026-Q1"), ] 
+
+mediation_mod1_LearnWork <- sem(model_path, data = group1,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group2 <- LearnWork[LearnWork$first_regular_quarter %in% c("2025-Q1","2025-Q2", "2025-Q3","2025-Q4"), ]
+
+mediation_mod2_LearnWork <- sem(model_path, data = group2,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group3 <- LearnWork[LearnWork$first_regular_quarter %in% c( "2024-Q4","2025-Q1","2025-Q2","2025-Q3"), ]
+
+mediation_mod3_LearnWork <- sem(model_path, data = group3,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group4 <- LearnWork[LearnWork$first_regular_quarter %in% c( "2024-Q3","2024-Q4","2025-Q2","2025-Q1"), ]
+
+mediation_mod4_LearnWork <- sem(model_path, data = group4,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group5 <- LearnWork[LearnWork$first_regular_quarter %in% c( "2024-Q2","2024-Q3",'2024-Q4',"2025-Q1"), ]
+
+mediation_mod5_LearnWork <- sem(model_path, data = group5,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group6 <- LearnWork[LearnWork$first_regular_quarter %in% c( "2024-Q1","2024-Q2",'2024-Q3','2024-Q4'), ]
+
+mediation_mod6_LearnWork <- sem(model_path, data = group6,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group7 <- LearnWork[LearnWork$first_regular_quarter %in% c( '2023-Q4',"2024-Q1",'2024-Q2','2024-Q3'), ]
+
+mediation_mod7_LearnWork <- sem(model_path, data = group7,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group8 <- LearnWork[LearnWork$first_regular_quarter %in% c( '2023-Q4','2023-Q3','2024-Q2','2024-Q1'), ]
+
+mediation_mod8_LearnWork <- sem(model_path, data = group8,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group9 <- LearnWork[LearnWork$first_regular_quarter %in% c('2024-Q1','2023-Q4','2023-Q3','2023-Q2'), ]
+
+mediation_mod9_LearnWork <- sem(model_path, data = group9,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+
+#------mediation effects (Other Scenarios)------
+
+OtherScenarios <- df_final %>%
+  filter(Learning + Work < 70) 
+         
+group0 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c("2025-Q3","2025-Q4","2026-Q1","2026-Q2"), ] 
+
+mediation_mod0_OtherScenarios <- sem(model_path, data = group0,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group1 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c("2025-Q2","2025-Q3","2025-Q4","2026-Q1"), ] 
+
+mediation_mod1_OtherScenarios <- sem(model_path, data = group1,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group2 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c("2025-Q1","2025-Q2", "2025-Q3","2025-Q4"), ]
+
+mediation_mod2_OtherScenarios <- sem(model_path, data = group2,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group3 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c( "2024-Q4","2025-Q1","2025-Q2","2025-Q3"), ]
+
+mediation_mod3_OtherScenarios <- sem(model_path, data = group3,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group4 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c( "2024-Q3","2024-Q4","2025-Q2","2025-Q1"), ]
+
+mediation_mod4_OtherScenarios <- sem(model_path, data = group4,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group5 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c( "2024-Q2","2024-Q3",'2024-Q4',"2025-Q1"), ]
+
+mediation_mod5_OtherScenarios <- sem(model_path, data = group5,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group6 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c( "2024-Q1","2024-Q2",'2024-Q3','2024-Q4'), ]
+
+mediation_mod6_OtherScenarios <- sem(model_path, data = group6,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group7 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c( '2023-Q4',"2024-Q1",'2024-Q2','2024-Q3'), ]
+
+mediation_mod7_OtherScenarios <- sem(model_path, data = group7,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group8 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c( '2023-Q4','2023-Q3','2024-Q2','2024-Q1'), ]
+
+mediation_mod8_OtherScenarios <- sem(model_path, data = group8,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group9 <- OtherScenarios[OtherScenarios$first_regular_quarter %in% c('2024-Q1','2023-Q4','2023-Q3','2023-Q2'), ]
+
+mediation_mod9_OtherScenarios <- sem(model_path, data = group9,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+
+#------coefficients trend------
+
+library(purrr)
+
+models_list <- list(
+  "25_3 to 26_2" = mediation_mod0_LearnWork,
+  "25_2 to 26_1" = mediation_mod1_LearnWork,
+  "25_1 to 25_4" = mediation_mod2_LearnWork,
+  "24_4 to 25_3" = mediation_mod3_LearnWork,
+  "24_3 to 25_2" = mediation_mod4_LearnWork,
+  "24_2 to 25_1" = mediation_mod5_LearnWork,
+  "24_1 to 24_4" = mediation_mod6_LearnWork,
+  "23_4 to 24_3" = mediation_mod7_LearnWork,
+  "23_3 to 24_2" = mediation_mod8_LearnWork,
+  "23_2 to 24_1" = mediation_mod9_LearnWork
+)
+
+models_list <- list(
+  "25_3 to 26_2" = mediation_mod0_OtherScenarios,
+  "25_2 to 26_1" = mediation_mod1_OtherScenarios,
+  "25_1 to 25_4" = mediation_mod2_OtherScenarios,
+  "24_4 to 25_3" = mediation_mod3_OtherScenarios,
+  "24_3 to 25_2" = mediation_mod4_OtherScenarios,
+  "24_2 to 25_1" = mediation_mod5_OtherScenarios,
+  "24_1 to 24_4" = mediation_mod6_OtherScenarios,
+  "23_4 to 24_3" = mediation_mod7_OtherScenarios,
+  "23_3 to 24_2" = mediation_mod8_OtherScenarios,
+  "23_2 to 24_1" = mediation_mod9_OtherScenarios
+)
+
+model_n <- purrr::map_int(
+  models_list,
+  ~ sum(lavaan::lavInspect(.x, "nobs"))
+)
+
+coef_order <- c("a1", "a2", "b1", "b2", "cprime1", "ind_F1", "ind_F2")
+
+extract_coefs <- function(mod, col_name) {
+  lavaan::parameterEstimates(mod) %>%
+    dplyr::filter(label %in% coef_order) %>%
+    dplyr::select(label, est, pvalue) %>%
+    dplyr::rename(
+      !!paste0(col_name, "_est") := est,
+      !!paste0(col_name, "_p") := pvalue
+    )
+}
+
+final_table <- purrr::imap(models_list, extract_coefs) %>%
+  purrr::reduce(dplyr::full_join, by = "label") %>%
+  dplyr::arrange(match(label, coef_order))
+
+a1_values <- final_table %>%
+  dplyr::filter(label == "a1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+a1_pvalues <- final_table %>%
+  dplyr::filter(label == "a1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+a2_values <- final_table %>%
+  dplyr::filter(label == "a2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+a2_pvalues <- final_table %>%
+  dplyr::filter(label == "a2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+b1_values <- final_table %>%
+  dplyr::filter(label == "b1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+b1_pvalues <- final_table %>%
+  dplyr::filter(label == "b1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+b2_values <- final_table %>%
+  dplyr::filter(label == "b2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+b2_pvalues <- final_table %>%
+  dplyr::filter(label == "b2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+c_values <- final_table %>%
+  dplyr::filter(label == "cprime1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+c_pvalues <- final_table %>%
+  dplyr::filter(label == "cprime1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+ind1_values <- final_table %>%
+  dplyr::filter(label == "ind_F1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+ind1_pvalues <- final_table %>%
+  dplyr::filter(label == "ind_F1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+ind2_values <- final_table %>%
+  dplyr::filter(label == "ind_F2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+ind2_pvalues <- final_table %>%
+  dplyr::filter(label == "ind_F2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+x_labels <- c("25-Q3 to 26-Q2", "25-Q2 to 26-Q1", "25-Q1 to 25-Q4", 
+              "24-Q4 to 25-Q3", "24-Q3 to 25-Q2", "24-Q2 to 25-Q1", 
+              "24-Q1 to 24-Q4", "23-Q4 to 24-Q3", "23-Q3 to 24-Q2", 
+              "23-Q2 to 24-Q1")
+
+df_c <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Time_Index = seq_along(x_labels),
+  Value = c_values,
+  Pvalue = c_pvalues,
+  n = model_n,
+  Group = 1
+)
+
+p_c <- ggplot(df_c, aes(x = Time_Index, y = Value)) +
+  geom_line(aes(group = Group), color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    aes(weight = n),
+    method = "loess",
+    span = 1,
+    color = "gray40",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_x_continuous(
+    breaks = df_c$Time_Index,
+    labels = df_c$Period
+  ) +
+  scale_y_continuous(limits = c(0, 2.3), expand = c(0, 0)) +
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.ticks = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9, color = "black"),
+    axis.text.y = element_text(size = 9, hjust = 0.9, color = "black"),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    axis.title.y = element_text(size = 11, color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Direct Effect From Acceptance",
+    x = " ",
+    y = "Coefficient (c)"
+  )
+
+fit <- loess(
+  Value ~ Time_Index,
+  data = df_c,
+  weights = n,
+  span = 1)
+
+df_c$Predicted <- predict(
+  fit,
+  newdata = data.frame(Time_Index = df_c$Time_Index)
+)
+
+df_c
+
+
+df_ind1 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Time_Index = seq_along(x_labels),
+  Value = ind1_values,
+  Pvalue = ind1_pvalues,
+  n = model_n,
+  Group = 1
+)
+
+p_ind1 <- ggplot(df_ind1, aes(x = Time_Index, y = Value)) +
+  geom_line(aes(group = Group), color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    aes(weight = n),
+    method = "loess",
+    span = 1,
+    color = "#6B9BD1",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_x_continuous(
+    breaks = df_ind1$Time_Index,
+    labels = df_ind1$Period
+  ) +
+  scale_y_continuous(limits = c(-0.1, 0.15001), expand = c(0, 0)) + 
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.ticks = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9, color = "black"),
+    axis.text.y = element_text(size = 9, hjust = 0.9, color = "black"),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    axis.title.y = element_text(size = 11, color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Mediation Effect of Embeddedness",
+    x = " ",
+    y = "Coefficient (a1 x b1)"
+  )
+
+fit <- loess(
+  Value ~ Time_Index,
+  data = df_ind1,
+  weights = n,
+  span = 1)
+
+df_ind1$Predicted <- predict(
+  fit,
+  newdata = data.frame(Time_Index = df_ind1$Time_Index)
+)
+
+df_ind1
+
+
+df_ind2 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Time_Index = seq_along(x_labels),
+  Value = ind2_values,
+  Pvalue = ind2_pvalues,
+  n = model_n,
+  Group = 1
+)
+
+p_ind2 <- ggplot(df_ind2, aes(x = Time_Index, y = Value)) +
+  geom_line(aes(group = Group), color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    aes(weight = n),
+    method = "loess",
+    span = 1,
+    color = "#56C596",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_x_continuous(
+    breaks = df_ind2$Time_Index,
+    labels = df_ind2$Period
+  ) +
+  scale_y_continuous(limits = c(-0.3, 1.0), expand = c(0, 0)) + 
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.ticks = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9, color = "black"),
+    axis.text.y = element_text(size = 9, hjust = 0.9, color = "black"),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    axis.title.y = element_text(size = 11, color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Mediation Effect of Critical Thinking",
+    x = "",
+    y = "Coefficient (a2 x b2)"
+  )
+
+fit <- loess(
+  Value ~ Time_Index,
+  data = df_ind2,
+  weights = n,
+  span = 1)
+
+df_ind2$Predicted <- predict(
+  fit,
+  newdata = data.frame(Time_Index = df_ind2$Time_Index)
+)
+
+df_ind2
+
+
+p_ind1 <- p_ind1 + theme(plot.margin = margin(5, 10, 5, 8))
+p_ind2 <- p_ind2 + theme(plot.margin = margin(5, 10, 5, 8))
+p_c    <- p_c    + theme(plot.margin = margin(5, 10, 5, 8))
+
+p_effect_scenario <- arrangeGrob(
+  p_ind1, p_ind2, p_c, p_c,
+  p_ind1, p_ind2, p_c, p_c,
+  p_ind1, p_ind2, p_c, p_c,
+  ncol = 4
+)
+
+dev.new(width = 14, height = 10)
+grid.draw(p_effect_scenario)
+
+ggsave(
+  filename = "p_effect_scenario.png",
+  plot = p_effect_scenario,
+  width = 16,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+
+#------variable trajectory difference test----
+
+# trust
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  data %>%
+    mutate(
+      group = ifelse(Learning + Work >= 70, "outcome", "experience"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(F_trust, na.rm = TRUE),
+      n = sum(!is.na(F_trust)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "outcome")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "experience")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+trust_scenarios_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+ymax_trust_scenarios <- max(abs(c(trust_scenarios_diff$lower, trust_scenarios_diff$upper, trust_scenarios_diff$diff)), na.rm = TRUE)
+
+p_trust_scenarios_diff <- ggplot(trust_scenarios_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = 'dashed',
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "black",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_trust_scenarios, ymax_trust_scenarios),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_trust_scenarios_diff)
+
+
+# Embeddedness
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  data %>%
+    mutate(
+      group = ifelse(Learning + Work >= 70, "outcome", "experience"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(embed_F, na.rm = TRUE),
+      n = sum(!is.na(embed_F)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "outcome")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "experience")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+embed_scenarios_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+ymax_embed_scenarios <- max(abs(c(embed_scenarios_diff$lower, embed_scenarios_diff$upper, embed_scenarios_diff$diff)), na.rm = TRUE)
+
+p_embed_scenarios_diff <- ggplot(embed_scenarios_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "#6B9BD1",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_embed_scenarios, ymax_embed_scenarios),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_embed_scenarios_diff)
+
+
+
+# CT
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  
+  data %>%
+    mutate(
+      group = ifelse(Learning + Work >= 70, "outcome", "experience"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(AI_CT_F, na.rm = TRUE),
+      n = sum(!is.na(AI_CT_F)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "outcome")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "experience")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+CT_scenarios_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+ymax_CT_scenarios <- max(abs(c(CT_scenarios_diff$lower, CT_scenarios_diff$upper, CT_scenarios_diff$diff)), na.rm = TRUE)
+
+p_CT_scenarios_diff <- ggplot(CT_scenarios_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "#56C596",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_CT_scenarios, ymax_CT_scenarios),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_CT_scenarios_diff)
+
+
+# Acceptance
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  
+  data %>%
+    mutate(
+      group = ifelse(Learning + Work >= 70, "outcome", "experience"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(Acceptance_F, na.rm = TRUE),
+      n = sum(!is.na(Acceptance_F)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "outcome")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "experience")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+accept_scenarios_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+ymax_accept_scenarios <- max(abs(c(accept_scenarios_diff$lower, accept_scenarios_diff$upper, accept_scenarios_diff$diff)), na.rm = TRUE)
+
+p_accept_scenarios_diff <- ggplot(accept_scenarios_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "gray40",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_accept_scenarios, ymax_accept_scenarios),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_accept_scenarios_diff)
+
+
+
+```
+
+```{r Study 4: Task Types}
+
+#------Trajectory: Trust------
+
+sum(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization >= 60, na.rm = TRUE) # 619
+
+sum(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization < 60, na.rm = TRUE) # 703
+
+
+plot_trust_closed <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization >= 60,
+         ) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(F_trust, na.rm = TRUE),
+    sd = sd(F_trust, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_trust_closed <- ggplot(plot_trust_closed, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1), 
+    se = TRUE, 
+    color = "black", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_trust_closed$Time_Index, 
+                     labels = as.character(plot_trust_closed$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.7, 0.4)) + 
+  theme_minimal() +
+  labs(
+    title = "Closed",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+plot_trust_open <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization < 60,
+         ) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(F_trust, na.rm = TRUE),
+    sd = sd(F_trust, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_trust_open <- ggplot(plot_trust_open, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "black", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_trust_open$Time_Index, 
+                     labels = as.character(plot_trust_open$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.7, 0.4)) + 
+  theme_minimal() +
+  labs(
+    title = "Open",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+
+#------Trajectory: Critical Thinking-------
+
+
+plot_CT_closed <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization >= 60) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(AI_CT_F, na.rm = TRUE),
+    sd = sd(AI_CT_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_CT_closed <- ggplot(plot_CT_closed, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "#56C596", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_CT_closed$Time_Index, 
+                     labels = as.character(plot_CT_closed$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) + 
+  theme_minimal() +
+  labs(
+    title = "closed",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+plot_CT_open <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization < 60) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(AI_CT_F, na.rm = TRUE),
+    sd = sd(AI_CT_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_CT_open <- ggplot(plot_CT_open, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "#56C596", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_CT_open$Time_Index, 
+                     labels = as.character(plot_CT_open$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) + 
+  theme_minimal() +
+  labs(
+    title = "open",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+
+#------Trajectory: Embeddedness-------
+
+plot_EM_closed <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization >= 60) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(embed_F, na.rm = TRUE),
+    sd = sd(embed_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_EM_closed <- ggplot(plot_EM_closed, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "#6B9BD1", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_EM_closed$Time_Index, 
+                     labels = as.character(plot_EM_closed$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-1, 0.5)) + 
+  theme_minimal() +
+  labs(
+    title = "Closed",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+plot_EM_open <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization < 60) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(embed_F, na.rm = TRUE),
+    sd = sd(embed_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_EM_open <- ggplot(plot_EM_open, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "#6B9BD1", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_EM_open$Time_Index, 
+                     labels = as.character(plot_EM_open$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-1, 0.5)) + 
+  theme_minimal() +
+  labs(
+    title = "Open",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9,color = "black"),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+
+#------Trajectory: Acceptance-------
+
+plot_closed <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization >= 60) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(Acceptance_F, na.rm = TRUE),
+    sd = sd(Acceptance_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_accept_closed <- ggplot(plot_closed, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "gray30", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_closed$Time_Index, 
+                     labels = as.character(plot_closed$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.5, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = "closed",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.6),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+plot_open <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization < 60) %>% 
+  group_by(first_regular_quarter) %>%
+  summarise(
+    mean = mean(Acceptance_F, na.rm = TRUE),
+    sd = sd(Acceptance_F, na.rm = TRUE),
+    n = n()  
+  ) %>%
+  ungroup() %>%
+  arrange(first_regular_quarter) %>%    
+  mutate(Time_Index = row_number())  
+
+p_accept_open <- ggplot(plot_open, aes(x = Time_Index, y = mean)) +
+  geom_line(color = "gray60", linetype = "dashed", size = 0.8) +
+  geom_point(color = "gray60", size = 2.5) +
+  geom_smooth(
+    aes(weight = n), 
+    method = "loess", 
+    span = 0.8, 
+    method.args = list(degree = 1),
+    se = TRUE, 
+    color = "gray30", 
+    size = 3.5
+  ) +
+  scale_x_continuous(breaks = plot_open$Time_Index, 
+                     labels = as.character(plot_open$first_regular_quarter)) +
+  coord_cartesian(ylim = c(-0.5, 0.3)) + 
+  theme_minimal() +
+  labs(
+    title = "open",
+    x = " ",
+    y = " "
+  ) +
+  theme(
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),  
+    axis.ticks.x = element_line(color = "black", linewidth = 0.6),
+    axis.ticks.length.x = unit(4, "pt"),
+    axis.line = element_line(color = "black", linewidth = 0.6),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9,color = "black"),
+    axis.text.y = element_text(size = 9),
+    axis.title.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5, size = 11, face='bold')
+  )
+
+
+library(gridExtra)
+library(grid)
+
+p_task <- arrangeGrob(                       p_trust_closed,p_CT_closed,p_EM_closed,p_accept_closed,
+p_trust_open,p_CT_open,p_EM_open,p_accept_open,
+p_trust_open,p_CT_open,p_EM_open,p_accept_open, ncol = 4)
+
+dev.new(width = 16, height = 10)
+grid.draw(p_task)
+
+ggsave(
+  filename = "p_task.png",
+  plot = p_task,
+  width = 16,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+#------mediation effects (open)------
+ 
+Open <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization < 60 )        
+
+group0 <- Open[Open$first_regular_quarter %in% c("2025-Q3","2025-Q4","2026-Q1","2026-Q2"), ] 
+mediation_mod0_Open <- sem(model_path, data = group0,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group1 <- Open[Open$first_regular_quarter %in% c("2025-Q2","2025-Q3","2025-Q4","2026-Q1"), ] 
+mediation_mod1_Open <- sem(model_path, data = group1,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group2 <- Open[Open$first_regular_quarter %in% c("2025-Q1","2025-Q2", "2025-Q3","2025-Q4"), ]
+mediation_mod2_Open <- sem(model_path, data = group2,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group3 <- Open[Open$first_regular_quarter %in% c( "2024-Q4","2025-Q1","2025-Q2","2025-Q3"), ]
+mediation_mod3_Open <- sem(model_path, data = group3,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group4 <- Open[Open$first_regular_quarter %in% c( "2024-Q3","2024-Q4","2025-Q2","2025-Q1"), ]
+mediation_mod4_Open <- sem(model_path, data = group4,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group5 <- Open[Open$first_regular_quarter %in% c( "2024-Q2","2024-Q3",'2024-Q4',"2025-Q1"), ]
+mediation_mod5_Open <- sem(model_path, data = group5,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group6 <- Open[Open$first_regular_quarter %in% c( "2024-Q1","2024-Q2",'2024-Q3','2024-Q4'), ]
+mediation_mod6_Open <- sem(model_path, data = group6,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group7 <- Open[Open$first_regular_quarter %in% c( '2023-Q4',"2024-Q1",'2024-Q2','2024-Q3'), ]
+mediation_mod7_Open <- sem(model_path, data = group7,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group8 <- Open[Open$first_regular_quarter %in% c( '2023-Q4','2023-Q3','2024-Q2','2024-Q1'), ]
+mediation_mod8_Open <- sem(model_path, data = group8,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group9 <- Open[Open$first_regular_quarter %in% c('2024-Q1','2023-Q4','2023-Q3','2023-Q2'), ]
+mediation_mod9_Open <- sem(model_path, data = group9,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+#------mediation effects (closed)------
+
+Closed <- df_final %>%
+  filter(df_final$Knowledge_Inquiry + df_final$Analysis + df_final$Optimization >= 60 )
+
+group0 <- Closed[Closed$first_regular_quarter %in% c("2025-Q3","2025-Q4","2026-Q1","2026-Q2"), ] 
+mediation_mod0_Closed <- sem(model_path, data = group0,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group1 <- Closed[Closed$first_regular_quarter %in% c("2025-Q2","2025-Q3","2025-Q4","2026-Q1"), ] 
+mediation_mod1_Closed <- sem(model_path, data = group1,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group2 <- Closed[Closed$first_regular_quarter %in% c("2025-Q1","2025-Q2", "2025-Q3","2025-Q4"), ]
+mediation_mod2_Closed <- sem(model_path, data = group2,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group3 <- Closed[Closed$first_regular_quarter %in% c( "2024-Q4","2025-Q1","2025-Q2","2025-Q3"), ]
+mediation_mod3_Closed <- sem(model_path, data = group3,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group4 <- Closed[Closed$first_regular_quarter %in% c( "2024-Q3","2024-Q4","2025-Q2","2025-Q1"), ]
+mediation_mod4_Closed <- sem(model_path, data = group4,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group5 <- Closed[Closed$first_regular_quarter %in% c( "2024-Q2","2024-Q3",'2024-Q4',"2025-Q1"), ]
+mediation_mod5_Closed <- sem(model_path, data = group5,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group6 <- Closed[Closed$first_regular_quarter %in% c( "2024-Q1","2024-Q2",'2024-Q3','2024-Q4'), ]
+mediation_mod6_Closed <- sem(model_path, data = group6,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group7 <- Closed[Closed$first_regular_quarter %in% c( '2023-Q4',"2024-Q1",'2024-Q2','2024-Q3'), ]
+mediation_mod7_Closed <- sem(model_path, data = group7,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group8 <- Closed[Closed$first_regular_quarter %in% c( '2023-Q4','2023-Q3','2024-Q2','2024-Q1'), ]
+mediation_mod8_Closed <- sem(model_path, data = group8,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+group9 <- Closed[Closed$first_regular_quarter %in% c('2024-Q1','2023-Q4','2023-Q3','2023-Q2'), ]
+mediation_mod9_Closed <- sem(model_path, data = group9,
+           estimator="ML",
+           se="bootstrap", bootstrap=5000)
+
+
+#------coefficients trend------
+
+library(purrr)
+
+models_list <- list(
+  "25_3 to 26_2" = mediation_mod0_Open,
+  "25_2 to 26_1" = mediation_mod1_Open,
+  "25_1 to 25_4" = mediation_mod2_Open,
+  "24_4 to 25_3" = mediation_mod3_Open,
+  "24_3 to 25_2" = mediation_mod4_Open,
+  "24_2 to 25_1" = mediation_mod5_Open,
+  "24_1 to 24_4" = mediation_mod6_Open,
+  "23_4 to 24_3" = mediation_mod7_Open,
+  "23_3 to 24_2" = mediation_mod8_Open,
+  "23_2 to 24_1" = mediation_mod9_Open
+)
+
+models_list <- list(
+  "25_3 to 26_2" = mediation_mod0_Closed,
+  "25_2 to 26_1" = mediation_mod1_Closed,
+  "25_1 to 25_4" = mediation_mod2_Closed,
+  "24_4 to 25_3" = mediation_mod3_Closed,
+  "24_3 to 25_2" = mediation_mod4_Closed,
+  "24_2 to 25_1" = mediation_mod5_Closed,
+  "24_1 to 24_4" = mediation_mod6_Closed,
+  "23_4 to 24_3" = mediation_mod7_Closed,
+  "23_3 to 24_2" = mediation_mod8_Closed,
+  "23_2 to 24_1" = mediation_mod9_Closed
+)
+
+model_n <- purrr::map_int(models_list, ~ sum(lavaan::lavInspect(.x, "nobs")))
+
+coef_order <- c("a1", "a2", "b1", "b2", "cprime1", "ind_F1", "ind_F2")
+
+extract_coefs <- function(mod, col_name) {
+  lavaan::parameterEstimates(mod) %>%
+    dplyr::filter(label %in% coef_order) %>%
+    dplyr::select(label, est, pvalue) %>%
+    dplyr::rename(
+      !!paste0(col_name, "_est") := est,
+      !!paste0(col_name, "_p") := pvalue
+    )
+}
+
+final_table <- purrr::imap(models_list, extract_coefs) %>%
+  purrr::reduce(dplyr::full_join, by = "label") %>%
+  dplyr::arrange(match(label, coef_order))
+
+a1_values <- final_table %>%
+  dplyr::filter(label == "a1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+a1_pvalues <- final_table %>%
+  dplyr::filter(label == "a1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+a2_values <- final_table %>%
+  dplyr::filter(label == "a2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+a2_pvalues <- final_table %>%
+  dplyr::filter(label == "a2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+b1_values <- final_table %>%
+  dplyr::filter(label == "b1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+b1_pvalues <- final_table %>%
+  dplyr::filter(label == "b1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+b2_values <- final_table %>%
+  dplyr::filter(label == "b2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+b2_pvalues <- final_table %>%
+  dplyr::filter(label == "b2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+c_values <- final_table %>%
+  dplyr::filter(label == "cprime1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+c_pvalues <- final_table %>%
+  dplyr::filter(label == "cprime1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+ind1_values <- final_table %>%
+  dplyr::filter(label == "ind_F1") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+ind1_pvalues <- final_table %>%
+  dplyr::filter(label == "ind_F1") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+ind2_values <- final_table %>%
+  dplyr::filter(label == "ind_F2") %>%
+  dplyr::select(dplyr::ends_with("_est")) %>%
+  as.numeric()
+
+ind2_pvalues <- final_table %>%
+  dplyr::filter(label == "ind_F2") %>%
+  dplyr::select(dplyr::ends_with("_p")) %>%
+  as.numeric()
+
+x_labels <- c("25-Q3 to 26-Q2", "25-Q2 to 26-Q1", "25-Q1 to 25-Q4", 
+              "24-Q4 to 25-Q3", "24-Q3 to 25-Q2", "24-Q2 to 25-Q1", 
+              "24-Q1 to 24-Q4", "23-Q4 to 24-Q3", "23-Q3 to 24-Q2", 
+              "23-Q2 to 24-Q1")
+
+
+df_c <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Time_Index = seq_along(x_labels),
+  Value = c_values,
+  Pvalue = c_pvalues,
+  n = model_n,
+  Group = 1
+)
+
+p_c <- ggplot(df_c, aes(x = Time_Index, y = Value)) +
+  geom_line(aes(group = Group), color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    aes(weight = n),
+    method = "loess",
+    span = 1,
+    color = "gray40",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_x_continuous(
+    breaks = df_c$Time_Index,
+    labels = df_c$Period
+  ) +
+  scale_y_continuous(limits = c(0, 2.5), expand = c(0, 0)) +
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.ticks = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9, color = "black"),
+    axis.text.y = element_text(size = 9, hjust = 0.9, color = "black"),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    axis.title.y = element_text(size = 11, color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Direct Effect From Acceptance",
+    x = " ",
+    y = "Coefficient (c)"
+  )
+
+fit <- loess(
+  Value ~ Time_Index,
+  data = df_c,
+  weights = n,
+  span = 1)
+
+df_c$Predicted <- predict(
+  fit,
+  newdata = data.frame(Time_Index = df_c$Time_Index)
+)
+
+df_c
+
+
+df_ind1 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Time_Index = seq_along(x_labels),
+  Value = ind1_values,
+  Pvalue = ind1_pvalues,
+  n = model_n,
+  Group = 1
+)
+
+p_ind1 <- ggplot(df_ind1, aes(x = Time_Index, y = Value)) +
+  geom_line(aes(group = Group), color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    aes(weight = n),
+    method = "loess",
+    span = 1,
+    color = "#6B9BD1",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_x_continuous(
+    breaks = df_ind1$Time_Index,
+    labels = df_ind1$Period
+  ) +
+  scale_y_continuous(limits = c(-0.1, 0.1501), expand = c(0, 0)) +  
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.ticks = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9, color = "black"),
+    axis.text.y = element_text(size = 9, hjust = 0.9, color = "black"),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    axis.title.y = element_text(size = 11, color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Mediation Effect of Embeddedness",
+    x = " ",
+    y = "Coefficient (a1 x b1)"
+  )
+
+fit <- loess(
+  Value ~ Time_Index,
+  data = df_ind1,
+  weights = n,
+  span = 1)
+
+df_ind1$Predicted <- predict(
+  fit,
+  newdata = data.frame(Time_Index = df_ind1$Time_Index)
+)
+
+df_ind1
+
+
+df_ind2 <- data.frame(
+  Period = factor(x_labels, levels = x_labels),
+  Time_Index = seq_along(x_labels),
+  Value = ind2_values,
+  Pvalue = ind2_pvalues,
+  n = model_n,
+  Group = 1
+)
+
+p_ind2 <- ggplot(df_ind2, aes(x = Time_Index, y = Value)) +
+  geom_line(aes(group = Group), color = "darkgray", linewidth = 1.2, linetype = "dashed") +      
+  geom_point(color = "darkgray", size = 3) +   
+  geom_smooth(
+    aes(weight = n),
+    method = "loess",
+    span = 1,
+    color = "#56C596",
+    linetype = "solid",
+    se = TRUE,
+    linewidth = 2
+  ) + 
+  scale_x_continuous(
+    breaks = df_ind2$Time_Index,
+    labels = df_ind2$Period
+  ) +
+  scale_y_continuous(limits = c(-0.4, 1.2), expand = c(0, 0)) +         
+  theme_minimal() +                                  
+  theme(
+    panel.background = element_blank(),
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black", linewidth = 0.8),
+    axis.ticks = element_line(color = "black", linewidth = 0.8),
+    axis.ticks.length = unit(0.15, "cm"),
+    axis.text.x = element_text(size = 9, angle = 45, hjust = 0.9, color = "black"),
+    axis.text.y = element_text(size = 9, hjust = 0.9, color = "black"),
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5),
+    axis.title.y = element_text(size = 11, color = "black"),
+    axis.title.x = element_blank() 
+  ) +
+  labs(
+    title = "Mediation Effect of Critical Thinking",
+    x = "",
+    y = "Coefficient (a2 x b2)"
+  )
+
+fit <- loess(
+  Value ~ Time_Index,
+  data = df_ind2,
+  weights = n,
+  span = 1)
+
+df_ind2$Predicted <- predict(
+  fit,
+  newdata = data.frame(Time_Index = df_ind2$Time_Index)
+)
+
+df_ind2
+
+
+p_ind1 <- p_ind1 + theme(plot.margin = margin(5, 10, 5, 8))
+p_ind2 <- p_ind2 + theme(plot.margin = margin(5, 10, 5, 8))
+p_c    <- p_c    + theme(plot.margin = margin(5, 10, 5, 8))
+
+
+p_effect_task <- arrangeGrob(p_ind1,p_ind2,p_c,p_c,
+             p_ind1,p_ind2,p_c,p_c,
+             p_ind1,p_ind2,p_c,p_c,
+  ncol = 4
+)
+
+dev.new(width = 14, height = 10)
+grid.draw(p_effect_task)
+
+ggsave(
+  filename = "p_effect_task.png",
+  plot = p_effect_task,
+  width = 16,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+#-----variable trajectory difference test----
+
+# trust
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  data %>%
+    mutate(
+      group = ifelse(Analysis + Knowledge_Inquiry + Optimization >= 60, "constrained", "openended"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(F_trust, na.rm = TRUE),
+      n = sum(!is.na(F_trust)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "constrained")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "openended")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+trust_tasks_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+ymax_trust_tasks <- max(abs(c(trust_tasks_diff$lower, trust_tasks_diff$upper, trust_tasks_diff$diff)), na.rm = TRUE)
+
+p_trust_tasks_diff <- ggplot(trust_tasks_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "black",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_trust_tasks, ymax_trust_tasks),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_trust_tasks_diff)
+
+
+# Embeddedness
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  
+  data %>%
+    mutate(
+      group = ifelse(Analysis + Knowledge_Inquiry + Optimization >= 60, "constrained", "openended"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(embed_F, na.rm = TRUE),
+      n = sum(!is.na(embed_F)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "constrained")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "openended")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+embed_tasks_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+ymax_embed_tasks <- max(abs(c(embed_tasks_diff$lower, embed_tasks_diff$upper, embed_tasks_diff$diff)), na.rm = TRUE)
+
+p_embed_tasks_diff <- ggplot(embed_tasks_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "#6B9BD1" ,
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_embed_tasks, ymax_embed_tasks),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_embed_tasks_diff)
+
+
+# CT
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  data %>%
+    mutate(
+      group = ifelse(Analysis + Knowledge_Inquiry + Optimization >= 60, "constrained", "openended"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(AI_CT_F, na.rm = TRUE),
+      n = sum(!is.na(AI_CT_F)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "constrained")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "openended")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+CT_tasks_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+ymax_CT_tasks <- max(abs(c(CT_tasks_diff$lower, CT_tasks_diff$upper, CT_tasks_diff$diff)), na.rm = TRUE)
+
+p_CT_tasks_diff <- ggplot(CT_tasks_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "#56C596",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_CT_tasks, ymax_CT_tasks),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_CT_tasks_diff)
+
+
+
+# Acceptance
+
+set.seed(42)
+
+B <- 2000
+time_grid <- seq(1, 13, by = 1)
+loess_span <- 0.8
+
+make_trend <- function(data) {
+  data %>%
+    mutate(
+      group = ifelse(Analysis + Knowledge_Inquiry + Optimization >= 60, "constrained", "openended"),
+      Time_Index = as.numeric(first_regular_quarter)
+    ) %>%
+    group_by(group, Time_Index) %>%
+    summarise(
+      mean = mean(Acceptance_F, na.rm = TRUE),
+      n = sum(!is.na(Acceptance_F)),
+      .groups = "drop"
+    ) %>%
+    filter(!is.na(mean), n > 0) %>%
+    arrange(group, Time_Index)
+}
+
+get_loess_diff <- function(df_trend_b, time_grid, span = 0.8) {
+  
+  df_high_b <- df_trend_b %>%
+    filter(group == "constrained")
+  
+  df_other_b <- df_trend_b %>%
+    filter(group == "openended")
+  
+  if (nrow(df_high_b) < 5 || nrow(df_other_b) < 5) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  fit_h <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_high_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  fit_o <- tryCatch(
+    loess(
+      mean ~ Time_Index,
+      data = df_other_b,
+      weights = n,
+      span = span,
+      degree = 1,
+      control = loess.control(surface = "direct")
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(fit_h) || is.null(fit_o)) {
+    return(rep(NA_real_, length(time_grid)))
+  }
+  
+  pred_h <- tryCatch(
+    predict(
+      fit_h,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_o <- tryCatch(
+    predict(
+      fit_o,
+      newdata = data.frame(Time_Index = time_grid)
+    ),
+    error = function(e) rep(NA_real_, length(time_grid))
+  )
+  
+  pred_h - pred_o
+}
+
+df_trend_orig <- make_trend(df_final)
+
+diff_point <- get_loess_diff(
+  df_trend_b = df_trend_orig,
+  time_grid = time_grid,
+  span = loess_span
+)
+
+boot_diff <- replicate(B, {
+  
+  boot_df <- df_final %>%
+    slice_sample(
+      n = nrow(df_final),
+      replace = TRUE
+    )
+  
+  df_trend_b <- make_trend(boot_df)
+  
+  get_loess_diff(
+    df_trend_b = df_trend_b,
+    time_grid = time_grid,
+    span = loess_span
+  )
+})
+
+ci_lower <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.025,
+  na.rm = TRUE
+)
+
+ci_upper <- apply(
+  boot_diff,
+  1,
+  quantile,
+  probs = 0.975,
+  na.rm = TRUE
+)
+
+accept_tasks_diff <- tibble(
+  Time_Index = time_grid,
+  diff = diff_point,
+  lower = ci_lower,
+  upper = ci_upper
+)
+
+ymax_accept_tasks <- max(abs(c(accept_tasks_diff$lower, accept_tasks_diff$upper, accept_tasks_diff$diff)), na.rm = TRUE)
+
+p_accept_tasks_diff <- ggplot(accept_tasks_diff, aes(x = Time_Index, y = diff)) +
+  geom_ribbon(
+    aes(ymin = lower, ymax = upper),
+    fill = "gray80",
+    alpha = 0.4
+  ) +
+  geom_hline(
+    yintercept = 0,
+    color = "darkred",
+    linetype = "dashed",
+    linewidth = 1
+  ) +
+  geom_line(
+    color = "gray40",
+    linewidth = 2
+  ) +
+  scale_x_continuous(
+    breaks = time_grid,
+    expand = expansion(mult = c(0.02, 0.02))
+  ) +
+  scale_y_continuous(
+    limits = c(-ymax_accept_tasks, ymax_accept_tasks),
+    expand = expansion(mult = c(0.05, 0.05)),
+    labels = function(x) sprintf("%.2f", x)
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    title = NULL
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "white"),
+    axis.title = element_text(color = "black"),
+    axis.text.x = element_text(color = "black"),
+    axis.ticks.x = element_line(color = "black"),
+    axis.text.y = element_text(color = "black"),
+    plot.title = element_text(face = "bold"),
+    axis.line.x = element_line(color = "black", linewidth = 0.5),
+    axis.line.y = element_line(color = "black", linewidth = 0.5)
+  )
+
+print(p_accept_tasks_diff)
+
+
+
+library(gridExtra)
+library(grid)
+
+p_diff <- arrangeGrob(p_trust_models_diff,p_embed_models_diff, p_CT_models_diff,p_accept_models_diff,
+                                 p_trust_scenarios_diff,p_embed_scenarios_diff, p_CT_scenarios_diff,p_accept_scenarios_diff,
+                                 p_trust_tasks_diff,p_embed_tasks_diff, p_CT_tasks_diff,p_accept_tasks_diff,
+                      p_trust_tasks_diff,p_embed_tasks_diff, p_CT_tasks_diff,p_accept_tasks_diff,
+                     ncol = 4)
+
+dev.new(width = 16, height = 10)
+grid.draw(p_diff)
+
+ggsave(
+  filename = "p_diff.png",
+  plot = p_diff,
+  width = 16,
+  height = 10,
+  units = "in",
+  dpi = 300,
+  bg = "white"
+)
+
+
+```
